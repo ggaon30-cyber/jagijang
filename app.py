@@ -1,7 +1,7 @@
 import streamlit as st
 import streamlit.components.v1 as components
 import numpy as np
-import plotly.graph_objects as go
+import json
 
 # -----------------------------------------------------------------------------
 # 1. 페이지 및 세션 상태 초기화
@@ -113,38 +113,16 @@ def get_perpendicular_foot_and_radius(target_pt, wire):
         dx, dy = x2 - x1, y2 - y1
         len_sq = dx**2 + dy**2
         if len_sq < 1e-8:
-            return (x1, y1), np.hypot(tx - x1, ty - y1)
+            return (x1, y1), float(np.hypot(tx - x1, ty - y1))
         t = ((tx - x1) * dx + (ty - y1) * dy) / len_sq
-        foot_x = x1 + t * dx
-        foot_y = y1 + t * dy
-        radius = np.hypot(tx - foot_x, ty - foot_y)
+        foot_x = float(x1 + t * dx)
+        foot_y = float(y1 + t * dy)
+        radius = float(np.hypot(tx - foot_x, ty - foot_y))
         return (foot_x, foot_y), radius
     elif wire['type'] == 'circle':
         cx, cy = wire['center']
-        radius = np.hypot(tx - cx, ty - cy)
-        return (cx, cy), radius
-
-def calc_total_B_scalar(px, py, wires, symbol_values):
-    total_b = 0.0
-    for w in wires:
-        I_val = get_numeric_current(w['current_symbol'], symbol_values)
-        if w['type'] == 'straight':
-            x1, y1 = w['p1']
-            x2, y2 = w['p2']
-            dx = (x2 - x1) * w['direction']
-            dy = (y2 - y1) * w['direction']
-            line_len = np.hypot(dx, dy)
-            if line_len < 1e-6: continue
-            cross_z = (dx * (py - y1) - dy * (px - x1))
-            r = np.abs(cross_z) / line_len
-            if r < 0.05: continue
-            total_b += (I_val / r) * np.sign(cross_z)
-        elif w['type'] == 'circle':
-            cx, cy = w['center']
-            k = w.get('b_scale', 1.0)
-            if np.hypot(px - cx, py - cy) < 0.1:
-                total_b += (I_val / 0.5) * k * w['direction']
-    return total_b
+        radius = float(np.hypot(tx - cx, ty - cy))
+        return (float(cx), float(cy)), radius
 
 # -----------------------------------------------------------------------------
 # 3. 메인 인터페이스 & 툴바
@@ -209,16 +187,95 @@ if not st.session_state.is_running:
     else:
         st.caption("👆 [클릭 비활성화 모드] 화면 조작 시 요소가 추가되지 않습니다.")
 else:
-    st.info("📊 **[자기장 해석 모드]** 애니메이션이 상시 자동 재생 중입니다. 회전 속도와 나란한 밀도로 자기장 세기를 구분할 수 있습니다.")
+    st.info("📊 **[자기장 해석 모드]** 접선과 나란한 통통한 회색 타원 유체가 상시 자동 흐름을 생성합니다.")
 
 # -----------------------------------------------------------------------------
-# 4. 좌표평면 시각화 (Plotly)
+# 4. 시각화 엔진 (편집 모드: Plotly / 해석 모드: Native JS 60FPS Engine)
 # -----------------------------------------------------------------------------
-fig = go.Figure()
+if not st.session_state.is_running:
+    # 편집 모드용 Plotly 차트
+    import plotly.graph_objects as go
+    fig = go.Figure()
 
-# 1) 전체 자기장 등고선 (-20d ~ 20d)
-if st.session_state.is_running and len(st.session_state.wires) > 0:
-    grid_range = np.linspace(-20.0, 20.0, 200)
+    grid_x, grid_y = np.meshgrid(range(-20, 21), range(-20, 21))
+    fig.add_trace(go.Scatter(
+        x=grid_x.flatten(), y=grid_y.flatten(),
+        mode='markers', marker=dict(size=10, color='rgba(0,0,0,0.01)'),
+        hoverinfo='x+y', showlegend=False
+    ))
+
+    for wire in st.session_state.wires:
+        sym, name = wire['current_symbol'], wire['name']
+        if wire['type'] == 'straight':
+            (x1, y1), (x2, y2) = wire['p1'], wire['p2']
+            if wire['direction'] == -1:
+                x1, y1, x2, y2 = x2, y2, x1, y1
+            dx, dy = x2 - x1, y2 - y1
+            length = np.hypot(dx, dy)
+            if length < 1e-5: continue
+            ux, uy = dx / length, dy / length
+            
+            fig.add_trace(go.Scatter(
+                x=[x1 - ux * 40, x2 + ux * 40], y=[y1 - uy * 40, y2 + uy * 40],
+                mode='lines', line=dict(color='#111111', width=3.8),
+                showlegend=False, hoverinfo='none'
+            ))
+            mx, my = (x1 + x2) / 2, (y1 + y2) / 2
+            fig.add_annotation(x=x2 + uy * 0.25, y=y2 - ux * 0.25, text=f"<b>{name}</b>", showarrow=False, font=dict(size=15, color="black"))
+            fig.add_annotation(
+                x=mx + ux * 0.5, y=my + uy * 0.5, ax=mx, ay=my, xref="x", yref="y", axref="x", ayref="y",
+                showarrow=True, arrowhead=2, arrowsize=1.2, arrowwidth=2.5, arrowcolor="black",
+                text=f"  <b><i>{sym}</i></b>", font=dict(size=13, color="black"), align="left"
+            )
+
+        elif wire['type'] == 'circle':
+            cx, cy = wire['center']
+            r = wire.get('radius', 0.5)
+            theta = np.linspace(0, 2*np.pi, 100)
+            fig.add_trace(go.Scatter(
+                x=cx + r*np.cos(theta), y=cy + r*np.sin(theta),
+                mode='lines', line=dict(color='#111111', width=3.0, dash='dash' if wire['direction']==-1 else 'solid'),
+                showlegend=False, hoverinfo='none'
+            ))
+            fig.add_annotation(x=cx - r - 0.25, y=cy, text=f"<b>{name}</b>", showarrow=False, font=dict(size=15, color="black"))
+            arrow_dir = 1 if wire['direction'] == 1 else -1
+            fig.add_annotation(
+                x=cx - 0.2*arrow_dir, y=cy + r, ax=cx + 0.2*arrow_dir, ay=cy + r, xref="x", yref="y", axref="x", ayref="y",
+                showarrow=True, arrowhead=2, arrowsize=1.2, arrowwidth=2.5, arrowcolor="black",
+                text=f"<b><i>{sym}</i></b>", font=dict(size=13, color="black")
+            )
+
+    for pt in st.session_state.points:
+        fig.add_trace(go.Scatter(
+            x=[pt['x']], y=[pt['y']], mode='markers+text',
+            marker=dict(size=9, color='#0044cc'),
+            text=[f"<b>{pt['name']}</b>"], textposition="top center",
+            textfont=dict(size=14, color="#0044cc"), showlegend=False
+        ))
+
+    if st.session_state.p1_temp is not None:
+        p1 = st.session_state.p1_temp
+        fig.add_trace(go.Scatter(
+            x=[p1[0]], y=[p1[1]], mode='markers',
+            marker=dict(size=12, color='red', symbol='x'),
+            showlegend=False
+        ))
+
+    tick_range = list(range(-20, 21))
+    tick_labels = [f"{i}d" if i != 0 else "O" for i in range(-20, 21)]
+
+    fig.update_layout(
+        template="plotly_white",
+        xaxis=dict(range=[-5.5, 5.5], zeroline=True, zerolinecolor='#444444', zerolinewidth=1.8, showgrid=True, gridcolor='#e5e5e5', tickvals=tick_range, ticktext=tick_labels, title="x"),
+        yaxis=dict(range=[-5.5, 5.5], zeroline=True, zerolinecolor='#444444', zerolinewidth=1.8, showgrid=True, gridcolor='#e5e5e5', tickvals=tick_range, ticktext=tick_labels, title="y", scaleanchor="x", scaleratio=1),
+        width=720, height=720, margin=dict(l=30, r=30, t=30, b=30)
+    )
+
+    selected_data = st.plotly_chart(fig, use_container_width=True, on_select="rerun", selection_mode="points", key="interactive_grid")
+
+else:
+    # 📊 [자기장 해석 모드] - 클라이언트 측 Native JS 60FPS 애니메이션 엔진 주입
+    grid_range = np.linspace(-20.0, 20.0, 150)
     X, Y = np.meshgrid(grid_range, grid_range)
     Z_total = np.zeros_like(X)
     
@@ -229,345 +286,324 @@ if st.session_state.is_running and len(st.session_state.wires) > 0:
         elif wire['type'] == 'circle':
             k_val = wire.get('b_scale', 1.0)
             Z_total += calc_circle_wire_B(X, Y, wire['center'], wire.get('radius', 0.5), I_val, wire['direction'], k_scale=k_val)
-            
-    Z_clipped = np.clip(Z_total, -8, 8)
-    fig.add_trace(go.Contour(
-        x=grid_range, y=grid_range, z=Z_clipped,
-        colorscale='RdBu_r', zmin=-4, zmax=4, opacity=0.35,
-        ncontours=25, showscale=True,
-        colorbar=dict(title="자기장 B", tickvals=[-3, 0, 3], ticktext=["⊗ 들어감", "0 상쇄", "⊙ 나옴"])
-    ))
 
-# 2) 클릭용 배경 격자점
-grid_x, grid_y = np.meshgrid(range(-20, 21), range(-20, 21))
-fig.add_trace(go.Scatter(
-    x=grid_x.flatten(), y=grid_y.flatten(),
-    mode='markers', marker=dict(size=10, color='rgba(0,0,0,0.01)'),
-    hoverinfo='x+y', showlegend=False
-))
+    Z_clipped = np.clip(Z_total, -8, 8).tolist()
 
-# 3) 도선 그리기
-for wire in st.session_state.wires:
-    sym, name = wire['current_symbol'], wire['name']
-    
-    if wire['type'] == 'straight':
-        (x1, y1), (x2, y2) = wire['p1'], wire['p2']
-        if wire['direction'] == -1:
-            x1, y1, x2, y2 = x2, y2, x1, y1
-        dx, dy = x2 - x1, y2 - y1
-        length = np.hypot(dx, dy)
-        if length < 1e-5: continue
-        ux, uy = dx / length, dy / length
-        
-        fig.add_trace(go.Scatter(
-            x=[x1 - ux * 40, x2 + ux * 40], y=[y1 - uy * 40, y2 + uy * 40],
-            mode='lines', line=dict(color='#111111', width=3.8),
-            showlegend=False, hoverinfo='none'
-        ))
-        
-        mx, my = (x1 + x2) / 2, (y1 + y2) / 2
-        fig.add_annotation(x=x2 + uy * 0.25, y=y2 - ux * 0.25, text=f"<b>{name}</b>", showarrow=False, font=dict(size=15, color="black"))
-        fig.add_annotation(
-            x=mx + ux * 0.5, y=my + uy * 0.5, ax=mx, ay=my, xref="x", yref="y", axref="x", ayref="y",
-            showarrow=True, arrowhead=2, arrowsize=1.2, arrowwidth=2.5, arrowcolor="black",
-            text=f"  <b><i>{sym}</i></b>", font=dict(size=13, color="black"), align="left"
-        )
-
-    elif wire['type'] == 'circle':
-        cx, cy = wire['center']
-        r = wire.get('radius', 0.5)
-        theta = np.linspace(0, 2*np.pi, 100)
-        
-        fig.add_trace(go.Scatter(
-            x=cx + r*np.cos(theta), y=cy + r*np.sin(theta),
-            mode='lines', line=dict(color='#111111', width=3.0, dash='dash' if wire['direction']==-1 else 'solid'),
-            showlegend=False, hoverinfo='none'
-        ))
-        fig.add_annotation(x=cx - r - 0.25, y=cy, text=f"<b>{name}</b>", showarrow=False, font=dict(size=15, color="black"))
-        arrow_dir = 1 if wire['direction'] == 1 else -1
-        fig.add_annotation(
-            x=cx - 0.2*arrow_dir, y=cy + r, ax=cx + 0.2*arrow_dir, ay=cy + r, xref="x", yref="y", axref="x", ayref="y",
-            showarrow=True, arrowhead=2, arrowsize=1.2, arrowwidth=2.5, arrowcolor="black",
-            text=f"<b><i>{sym}</i></b>", font=dict(size=13, color="black")
-        )
-
-# 4) 설치된 관찰 지점
-for pt in st.session_state.points:
-    fig.add_trace(go.Scatter(
-        x=[pt['x']], y=[pt['y']], mode='markers+text',
-        marker=dict(size=9, color='#0044cc'),
-        text=[f"<b>{pt['name']}</b>"], textposition="top center",
-        textfont=dict(size=14, color="#0044cc"), showlegend=False
-    ))
-
-# -----------------------------------------------------------------------------
-# 5. 짧은 회색톤 입자 애니메이션 생성 엔진
-# -----------------------------------------------------------------------------
-num_frames = 24
-
-if st.session_state.is_running and len(st.session_state.wires) > 0:
+    circle_info_list = []
     target_pt = st.session_state.target_coord
-    
-    circle_info = []
     for wire in st.session_state.wires:
         foot, r_val = get_perpendicular_foot_and_radius(target_pt, wire)
         if r_val > 0.05:
             I_val = get_numeric_current(wire['current_symbol'], st.session_state.symbol_values)
             b_mag = abs(I_val / r_val) if wire['type'] == 'straight' else abs(I_val / 0.5)
-            
-            circle_info.append({
-                "wire": wire,
-                "foot": foot,
-                "radius": r_val,
-                "b_mag": b_mag
+            circle_info_list.append({
+                "foot": [float(foot[0]), float(foot[1])],
+                "radius": float(r_val),
+                "bMag": float(b_mag),
+                "direction": int(wire.get('direction', 1))
             })
-            
-            # 가이드 궤적 점선
-            theta_line = np.linspace(0, 2*np.pi, 100)
-            fig.add_trace(go.Scatter(
-                x=foot[0] + r_val * np.cos(theta_line),
-                y=foot[1] + r_val * np.sin(theta_line),
-                mode='lines',
-                line=dict(color='rgba(180, 180, 190, 0.5)', width=1.0, dash='dot'),
-                hoverinfo='none', showlegend=False
-            ))
 
-    def generate_particle_data(frame_step):
-        px_list, py_list = [], []
-        angle_list, size_list, color_list = [], [], []
-        rot_frac = frame_step / num_frames
-        
-        for c in circle_info:
-            foot_x, foot_y = c["foot"]
-            r_base = c["radius"]
-            wire = c["wire"]
-            b_mag = c["b_mag"]
-            rot_dir = wire.get('direction', 1)
-            
-            # 자기장 세기별 회전 속도
-            speed_mult = np.clip(0.6 + 0.9 * b_mag, 0.6, 3.0)
-            
-            # 자기장 세기별 미세 궤적 분할 (간격 0.03d 이하로 밀착)
-            if b_mag < 0.7:
-                r_offsets = [0.0]
-                dashes_per_circle = 18
-            elif b_mag < 1.5:
-                r_offsets = [-0.025, 0.025]
-                dashes_per_circle = 26
-            else:
-                r_offsets = [-0.03, 0.0, 0.03]
-                dashes_per_circle = 34
+    # JS 데이터 직렬화
+    wires_json = json.dumps(st.session_state.wires)
+    points_json = json.dumps(st.session_state.points)
+    symbols_json = json.dumps(st.session_state.symbol_values)
+    target_json = json.dumps(st.session_state.target_coord)
+    circles_json = json.dumps(circle_info_list)
+    grid_x_json = json.dumps(grid_range.tolist())
+    z_json = json.dumps(Z_clipped)
 
-            base_angle = np.arctan2(target_pt[1] - foot_y, target_pt[0] - foot_x)
-            
-            for r_off in r_offsets:
-                r_curr = r_base + r_off
-                for p_i in range(dashes_per_circle):
-                    angle = base_angle + (2 * np.pi * p_i / dashes_per_circle) + (rot_dir * 2 * np.pi * rot_frac * speed_mult)
-                    px = foot_x + r_curr * np.cos(angle)
-                    py = foot_y + r_curr * np.sin(angle)
-                    
-                    # 상쇄 영역 투명도
-                    b_net = calc_total_B_scalar(px, py, st.session_state.wires, st.session_state.symbol_values)
-                    alpha = np.clip(abs(b_net) / 1.5, 0.0, 0.9)
-                    
-                    if alpha < 0.05:
-                        continue
-                        
-                    tangent_rad = angle + (np.pi / 2 if rot_dir == 1 else -np.pi / 2)
-                    tangent_deg = np.degrees(tangent_rad)
-                    
-                    # 가독성을 높이기 위한 명도별 회색(Gray) 색상 설정
-                    if b_mag >= 1.2:
-                        color_str = f"rgba(40, 45, 55, {alpha:.2f})"    # 강함: 어두운 흑회색
-                    elif b_mag >= 0.6:
-                        color_str = f"rgba(90, 95, 105, {alpha:.2f})"   # 중간: 진한 회색
-                    else:
-                        color_str = f"rgba(160, 165, 175, {alpha:.2f})" # 약함: 연한 회색
-                        
-                    # 짧고 잘잘한 크기 (3~8pt)
-                    dash_len = np.clip(3 + b_mag * 1.5, 3, 8)
-                    
-                    px_list.append(px)
-                    py_list.append(py)
-                    angle_list.append(tangent_deg)
-                    size_list.append(dash_len)
-                    color_list.append(color_str)
-                    
-        return px_list, py_list, angle_list, size_list, color_list
-
-    # 초기 프레임
-    i_px, i_py, i_ang, i_sz, i_col = generate_particle_data(0)
-    fig.add_trace(go.Scatter(
-        x=i_px, y=i_py,
-        mode='markers',
-        marker=dict(
-            symbol='line-ew',
-            size=i_sz,
-            angle=i_ang,
-            color=i_col,
-            line=dict(width=1.2)
-        ),
-        name="자기장 유체 입자", showlegend=False, hoverinfo='none'
-    ))
-
-    # Plotly Frame 데이터 생성
-    particle_trace_idx = len(fig.data) - 1
-    frames = []
-    for f_idx in range(num_frames):
-        fx, fy, fang, fsz, fcol = generate_particle_data(f_idx)
-        frames.append(go.Frame(
-            data=[go.Scatter(
-                x=fx, y=fy,
-                mode='markers',
-                marker=dict(symbol='line-ew', size=fsz, angle=fang, color=fcol, line=dict(width=1.2))
-            )],
-            traces=[particle_trace_idx],
-            name=f"frame_{f_idx}"
-        ))
-    fig.frames = frames
-
-# 선택 지점 십자 마커
-if st.session_state.is_running:
-    tx, ty = st.session_state.target_coord
-    fig.add_trace(go.Scatter(
-        x=[tx], y=[ty], mode='markers',
-        marker=dict(size=14, color='green', symbol='cross'),
-        showlegend=False, hoverinfo='none'
-    ))
-
-if st.session_state.p1_temp is not None:
-    p1 = st.session_state.p1_temp
-    fig.add_trace(go.Scatter(
-        x=[p1[0]], y=[p1[1]], mode='markers',
-        marker=dict(size=12, color='red', symbol='x'),
-        showlegend=False
-    ))
-
-tick_range = list(range(-20, 21))
-tick_labels = [f"{i}d" if i != 0 else "O" for i in range(-20, 21)]
-
-# updatemenus를 완전히 비워 재생 버튼 삭제
-fig.update_layout(
-    template="plotly_white",
-    updatemenus=[],
-    xaxis=dict(
-        range=[-5.5, 5.5], zeroline=True, zerolinecolor='#444444', zerolinewidth=1.8,
-        showgrid=True, gridcolor='#e5e5e5', gridwidth=0.8, tickvals=tick_range, ticktext=tick_labels, title="x"
-    ),
-    yaxis=dict(
-        range=[-5.5, 5.5], zeroline=True, zerolinecolor='#444444', zerolinewidth=1.8,
-        showgrid=True, gridcolor='#e5e5e5', gridwidth=0.8, tickvals=tick_range, ticktext=tick_labels, title="y",
-        scaleanchor="x", scaleratio=1
-    ),
-    width=720, height=720, margin=dict(l=30, r=30, t=30, b=30)
-)
-
-selected_data = st.plotly_chart(
-    fig, use_container_width=True, on_select="rerun", selection_mode="points", key="interactive_grid"
-)
-
-# -----------------------------------------------------------------------------
-# 6. 상시 자동 재생 JS 엔진 (재생 버튼 없이 무한 루프)
-# -----------------------------------------------------------------------------
-if st.session_state.is_running:
-    components.html(
-        """
+    html_code = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+        <style>
+            body {{ margin: 0; padding: 0; overflow: hidden; }}
+            #plotly_canvas {{ width: 720px; height: 720px; }}
+        </style>
+    </head>
+    <body>
+        <div id="plotly_canvas"></div>
         <script>
-        function startContinuousLoop() {
-            var plotlyDivs = window.parent.document.querySelectorAll('.stPlotlyChart .js-plotly-plot');
-            if (plotlyDivs.length > 0) {
-                var gd = plotlyDivs[plotlyDivs.length - 1];
-                if (window.parent.Plotly && gd._transitionData) {
-                    window.parent.Plotly.animate(gd, null, {
-                        frame: {duration: 40, redraw: false},
-                        fromcurrent: true,
-                        mode: 'immediate',
-                        loop: true
-                    });
-                } else {
-                    setTimeout(startContinuousLoop, 100);
-                }
-            } else {
-                setTimeout(startContinuousLoop, 150);
-            }
-        }
-        setTimeout(startContinuousLoop, 200);
+            const wires = {wires_json};
+            const points = {points_json};
+            const symbols = {symbols_json};
+            const targetPt = {target_json};
+            const circles = {circles_json};
+            const gridX = {grid_x_json};
+            const zData = {z_json};
+
+            function getI(sym) {{
+                let val = parseFloat(sym);
+                return isNaN(val) ? (symbols[sym] !== undefined ? symbols[sym] : 1.0) : val;
+            }}
+
+            function calcTotalB(px, py) {{
+                let totalB = 0;
+                for (let w of wires) {{
+                    let I = getI(w.current_symbol);
+                    if (w.type === 'straight') {{
+                        let x1 = w.p1[0], y1 = w.p1[1];
+                        let x2 = w.p2[0], y2 = w.p2[1];
+                        let dx = (x2 - x1) * w.direction;
+                        let dy = (y2 - y1) * w.direction;
+                        let lineLen = Math.hypot(dx, dy);
+                        if (lineLen < 1e-6) continue;
+                        let crossZ = dx * (py - y1) - dy * (px - x1);
+                        let r = Math.abs(crossZ) / lineLen;
+                        if (r < 0.05) continue;
+                        totalB += (I / r) * Math.sign(crossZ);
+                    }} else if (w.type === 'circle') {{
+                        let cx = w.center[0], cy = w.center[1];
+                        let k = w.b_scale || 1.0;
+                        if (Math.hypot(px - cx, py - cy) < 0.1) {{
+                            totalB += (I / 0.5) * k * w.direction;
+                        }}
+                    }}
+                }}
+                return totalB;
+            }}
+
+            // Traces 구성
+            let traces = [];
+
+            // 1) Contour
+            traces.push({{
+                x: gridX, y: gridX, z: zData,
+                type: 'contour', colorscale: 'RdBu_r', zmin: -4, zmax: 4, opacity: 0.35,
+                ncontours: 25, showscale: true,
+                colorbar: {{ title: '자기장 B', tickvals: [-3, 0, 3], ticktext: ['⊗ 들어감', '0 상쇄', '⊙ 나옴'] }}
+            }});
+
+            // 2) Guide circles
+            for (let c of circles) {{
+                let theta = [];
+                let gx = [], gy = [];
+                for (let a = 0; a <= 2*Math.PI; a += 0.06) {{
+                    gx.push(c.foot[0] + c.radius * Math.cos(a));
+                    gy.push(c.foot[1] + c.radius * Math.sin(a));
+                }}
+                traces.push({{
+                    x: gx, y: gy, mode: 'lines',
+                    line: {{ color: 'rgba(180, 180, 190, 0.5)', width: 1, dash: 'dot' }},
+                    hoverinfo: 'none', showlegend: false
+                }});
+            }}
+
+            // 3) Wires
+            for (let w of wires) {{
+                if (w.type === 'straight') {{
+                    let x1 = w.p1[0], y1 = w.p1[1], x2 = w.p2[0], y2 = w.p2[1];
+                    if (w.direction === -1) {{ [x1, y1, x2, y2] = [x2, y2, x1, y1]; }}
+                    let dx = x2 - x1, dy = y2 - y1;
+                    let len = Math.hypot(dx, dy);
+                    if (len > 1e-5) {{
+                        let ux = dx / len, uy = dy / len;
+                        traces.push({{
+                            x: [x1 - ux*40, x2 + ux*40], y: [y1 - uy*40, y2 + uy*40],
+                            mode: 'lines', line: {{ color: '#111111', width: 3.8 }}, showlegend: false
+                        }});
+                    }}
+                }} else if (w.type === 'circle') {{
+                    let cx = w.center[0], cy = w.center[1], r = w.radius || 0.5;
+                    let wx = [], wy = [];
+                    for (let a = 0; a <= 2*Math.PI; a += 0.06) {{
+                        wx.push(cx + r * Math.cos(a));
+                        wy.push(cy + r * Math.sin(a));
+                    }}
+                    traces.push({{
+                        x: wx, y: wy, mode: 'lines',
+                        line: {{ color: '#111111', width: 3, dash: w.direction === -1 ? 'dash' : 'solid' }}, showlegend: false
+                    }});
+                }}
+            }}
+
+            // 4) Points
+            for (let pt of points) {{
+                traces.push({{
+                    x: [pt.x], y: [pt.y], mode: 'markers+text',
+                    marker: {{ size: 9, color: '#0044cc' }},
+                    text: ['<b>' + pt.name + '</b>'], textposition: 'top center',
+                    textfont: {{ size: 14, color: '#0044cc' }}, showlegend: false
+                }});
+            }}
+
+            // 5) Target Point
+            traces.push({{
+                x: [targetPt[0]], y: [targetPt[1]], mode: 'markers',
+                marker: {{ size: 14, color: 'green', symbol: 'cross' }}, showlegend: false
+            }});
+
+            // 6) Particle Trace Index
+            let particleTraceIdx = traces.length;
+            traces.push({{
+                x: [], y: [], mode: 'markers',
+                marker: {{
+                    symbol: 'path://M -5,-2.8 A 5 2.8 0 1 0 5,2.8 A 5 2.8 0 1 0 -5,-2.8 Z',
+                    size: [], angle: [], color: [],
+                    line: {{ width: 0.8, color: 'rgba(30, 30, 30, 0.6)' }}
+                }},
+                showlegend: false, hoverinfo: 'none'
+            }});
+
+            let tickRange = [], tickLabels = [];
+            for (let i = -20; i <= 20; i++) {{
+                tickRange.push(i);
+                tickLabels.push(i === 0 ? "O" : i + "d");
+            }}
+
+            let layout = {{
+                template: 'plotly_white',
+                xaxis: {{ range: [-5.5, 5.5], zeroline: true, zerolinecolor: '#444444', zerolinewidth: 1.8, tickvals: tickRange, ticktext: tickLabels, title: 'x' }},
+                yaxis: {{ range: [-5.5, 5.5], zeroline: true, zerolinecolor: '#444444', zerolinewidth: 1.8, tickvals: tickRange, ticktext: tickLabels, title: 'y', scaleanchor: 'x', scaleratio: 1 }},
+                width: 720, height: 720, margin: {{ l: 30, r: 30, t: 30, b: 30 }}
+            }};
+
+            Plotly.newPlot('plotly_canvas', traces, layout);
+
+            // 60FPS 무한 자발적 애니메이션 루프
+            let frameStep = 0;
+            function animateParticles() {{
+                let pxList = [], pyList = [], angleList = [], colorList = [], sizeList = [];
+                let rotFrac = (frameStep % 180) / 180.0;
+
+                for (let c of circles) {{
+                    let footX = c.foot[0], footY = c.foot[1];
+                    let rBase = c.radius;
+                    let bMag = c.bMag;
+                    let rotDir = c.direction;
+
+                    let speedMult = Math.min(Math.max(0.6 + 0.8 * bMag, 0.6), 3.0);
+                    let rOffsets = [0.0];
+                    let count = 18;
+
+                    if (bMag >= 1.5) {{
+                        rOffsets = [-0.03, 0.0, 0.03];
+                        count = 32;
+                    }} else if (bMag >= 0.7) {{
+                        rOffsets = [-0.025, 0.025];
+                        count = 24;
+                    }}
+
+                    let baseAngle = Math.atan2(targetPt[1] - footY, targetPt[0] - footX);
+
+                    for (let rOff of rOffsets) {{
+                        let rCurr = rBase + rOff;
+                        for (let i = 0; i < count; i++) {{
+                            let angle = baseAngle + (2 * Math.PI * i / count) + (rotDir * 2 * Math.PI * rotFrac * speedMult);
+                            let px = footX + rCurr * Math.cos(angle);
+                            let py = footY + rCurr * Math.sin(angle);
+
+                            let bNet = calcTotalB(px, py);
+                            let alpha = Math.min(Math.abs(bNet) / 1.5, 0.88);
+                            if (alpha < 0.05) continue; // 상쇄 영역 소멸
+
+                            // 접선 방향 각도 계산 (v_x, v_y)
+                            let vx = -Math.sin(angle) * rotDir;
+                            let vy = Math.cos(angle) * rotDir;
+                            let tangentDeg = Math.atan2(vy, vx) * (180.0 / Math.PI);
+
+                            let grayVal = 100;
+                            if (bMag >= 1.2) grayVal = 40;       // 강함: 어두운 흑회색
+                            else if (bMag >= 0.6) grayVal = 90;  // 중간: 진한 회색
+                            else grayVal = 160;                  // 약함: 연한 회색
+
+                            let colorStr = `rgba(${{grayVal}}, ${{grayVal + 5}}, ${{grayVal + 10}}, ${{alpha.toFixed(2)}})`;
+                            let sizeVal = Math.min(Math.max(8 + bMag * 2, 8), 15);
+
+                            pxList.push(px);
+                            pyList.push(py);
+                            angleList.push(tangentDeg);
+                            colorList.push(colorStr);
+                            sizeList.push(sizeVal);
+                        }}
+                    }}
+                }}
+
+                Plotly.restyle('plotly_canvas', {{
+                    x: [pxList],
+                    y: [pyList],
+                    'marker.size': [sizeList],
+                    'marker.angle': [angleList],
+                    'marker.color': [colorList]
+                }}, [particleTraceIdx]);
+
+                frameStep++;
+                requestAnimationFrame(animateParticles);
+            }}
+
+            requestAnimationFrame(animateParticles);
         </script>
-        """,
-        height=0, width=0
-    )
+    </body>
+    </html>
+    """
+    components.html(html_code, height=730, width=730)
 
 # -----------------------------------------------------------------------------
-# 7. 좌표 클릭 이벤트 처리 (Snap & 즉시 반영)
+# 5. 좌표 클릭 이벤트 처리 (편집 모드 시)
 # -----------------------------------------------------------------------------
-if selected_data and "selection" in selected_data and "points" in selected_data["selection"]:
-    pts = selected_data["selection"]["points"]
-    if len(pts) > 0:
-        raw_x = float(pts[0]["x"])
-        raw_y = float(pts[0]["y"])
+if not st.session_state.is_running and 'selected_data' in locals():
+    if selected_data and "selection" in selected_data and "points" in selected_data["selection"]:
+        pts = selected_data["selection"]["points"]
+        if len(pts) > 0:
+            raw_x = float(pts[0]["x"])
+            raw_y = float(pts[0]["y"])
 
-        matched_coord = None
-        for pt in st.session_state.points:
-            if np.hypot(raw_x - pt['x'], raw_y - pt['y']) <= 0.4:
-                matched_coord = (float(pt['x']), float(pt['y']))
-                break
+            matched_coord = None
+            for pt in st.session_state.points:
+                if np.hypot(raw_x - pt['x'], raw_y - pt['y']) <= 0.4:
+                    matched_coord = (float(pt['x']), float(pt['y']))
+                    break
 
-        if matched_coord is None:
-            near_x, near_y = float(round(raw_x)), float(round(raw_y))
-            if np.hypot(raw_x - near_x, raw_y - near_y) <= 0.45:
-                matched_coord = (near_x, near_y)
+            if matched_coord is None:
+                near_x, near_y = float(round(raw_x)), float(round(raw_y))
+                if np.hypot(raw_x - near_x, raw_y - near_y) <= 0.45:
+                    matched_coord = (near_x, near_y)
 
-        if matched_coord is not None:
-            if st.session_state.is_running:
-                if st.session_state.target_coord != matched_coord:
-                    st.session_state.target_coord = matched_coord
+            if matched_coord is not None and matched_coord != st.session_state.last_processed_pt:
+                st.session_state.last_processed_pt = matched_coord
+
+                if st.session_state.tool_mode == "straight":
+                    if st.session_state.p1_temp is None:
+                        st.session_state.p1_temp = matched_coord
+                        st.rerun()
+                    else:
+                        p1, p2 = st.session_state.p1_temp, matched_coord
+                        if p1 != p2:
+                            w_name = chr(65 + len(st.session_state.wires))
+                            curr_symbol = f"I_{w_name}"
+                            st.session_state.wires.append({
+                                "type": "straight", "name": w_name, "p1": p1, "p2": p2,
+                                "current_symbol": curr_symbol, "direction": 1
+                            })
+                            if curr_symbol not in st.session_state.symbol_values:
+                                st.session_state.symbol_values[curr_symbol] = 1.0
+                        st.session_state.p1_temp = None
+                        st.rerun()
+
+                elif st.session_state.tool_mode == "circle":
+                    w_name = chr(65 + len(st.session_state.wires))
+                    curr_symbol = f"I_{w_name}"
+                    st.session_state.wires.append({
+                        "type": "circle", "name": w_name, "center": matched_coord, "radius": 0.5,
+                        "current_symbol": curr_symbol, "direction": 1, "b_scale": 1.0
+                    })
+                    if curr_symbol not in st.session_state.symbol_values:
+                        st.session_state.symbol_values[curr_symbol] = 1.0
                     st.rerun()
-            else:
-                if matched_coord != st.session_state.last_processed_pt:
-                    st.session_state.last_processed_pt = matched_coord
 
-                    if st.session_state.tool_mode == "straight":
-                        if st.session_state.p1_temp is None:
-                            st.session_state.p1_temp = matched_coord
-                            st.rerun()
-                        else:
-                            p1, p2 = st.session_state.p1_temp, matched_coord
-                            if p1 != p2:
-                                w_name = chr(65 + len(st.session_state.wires))
-                                curr_symbol = f"I_{w_name}"
-                                st.session_state.wires.append({
-                                    "type": "straight", "name": w_name, "p1": p1, "p2": p2,
-                                    "current_symbol": curr_symbol, "direction": 1
-                                })
-                                if curr_symbol not in st.session_state.symbol_values:
-                                    st.session_state.symbol_values[curr_symbol] = 1.0
-                            st.session_state.p1_temp = None
-                            st.rerun()
-
-                    elif st.session_state.tool_mode == "circle":
-                        w_name = chr(65 + len(st.session_state.wires))
-                        curr_symbol = f"I_{w_name}"
-                        st.session_state.wires.append({
-                            "type": "circle", "name": w_name, "center": matched_coord, "radius": 0.5,
-                            "current_symbol": curr_symbol, "direction": 1, "b_scale": 1.0
-                        })
-                        if curr_symbol not in st.session_state.symbol_values:
-                            st.session_state.symbol_values[curr_symbol] = 1.0
-                        st.rerun()
-
-                    elif st.session_state.tool_mode == "point":
-                        default_names = ["p", "O", "q", "r", "s", "t", "u", "v"]
-                        cnt = len(st.session_state.points)
-                        pt_name = default_names[cnt] if cnt < len(default_names) else f"P{cnt+1}"
-                        
-                        st.session_state.points.append({
-                            "name": pt_name, "x": matched_coord[0], "y": matched_coord[1]
-                        })
-                        st.rerun()
+                elif st.session_state.tool_mode == "point":
+                    default_names = ["p", "O", "q", "r", "s", "t", "u", "v"]
+                    cnt = len(st.session_state.points)
+                    pt_name = default_names[cnt] if cnt < len(default_names) else f"P{cnt+1}"
+                    
+                    st.session_state.points.append({
+                        "name": pt_name, "x": matched_coord[0], "y": matched_coord[1]
+                    })
+                    st.rerun()
 
 # -----------------------------------------------------------------------------
-# 8. 사이드바 제어판
+# 6. 사이드바 제어판
 # -----------------------------------------------------------------------------
 st.sidebar.title("⚙️ 설치 요소 관리")
 
@@ -626,7 +662,7 @@ if symbols:
         )
 
 # -----------------------------------------------------------------------------
-# 9. 수식 및 대입 결과
+# 7. 수식 및 대입 결과
 # -----------------------------------------------------------------------------
 if st.session_state.is_running:
     st.markdown("---")
@@ -646,7 +682,7 @@ if st.session_state.is_running:
                     break
 
             selected_pt_str = st.selectbox(
-                "🎯 빠른 선택 (클릭 설치된 관찰 지점)",
+                "🎯 해석 타겟 지점 선택",
                 ["선택 안 함"] + pt_options,
                 index=matched_idx,
                 key="target_selectbox"
