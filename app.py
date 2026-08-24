@@ -521,31 +521,48 @@ else:
                             let screenVy = -vy * (yaxis._length / (yaxis.range[1] - yaxis.range[0]));
                             let tangentAngle = Math.atan2(screenVy, screenVx);
 
-                            // 🎯 [90도 위상 보정 및 명암 판정]
-                            // 도선 중심 혹은 기준점 대비 입자의 상대각 (baseAngle과의 차이)에 90도(π/2) 회전 보정 반영
-                            let diffAngle = angle - baseAngle;
-                            // -π ~ π 범위로 정규화
-                            while (diffAngle > Math.PI) diffAngle -= 2 * Math.PI;
-                            while (diffAngle < -Math.PI) diffAngle += 2 * Math.PI;
+                           // 🎯 자기장 방향에 따른 명암 판정
+// Bz > 0 : 화면 밖으로 나오는 방향 (⊙) → 진하게
+// Bz < 0 : 화면 안으로 들어가는 방향 (⊗) → 흐리게
+//
+// c.direction은 해당 도선의 전류 방향을 나타내므로,
+// 관찰점에서의 자기장 방향은 현재 계산 엔진과 동일하게
+// direction의 부호를 이용한다.
 
-                            // cos(diffAngle - π/2) = sin(diffAngle) 값을 이용하여 오른쪽/왼쪽 영역을 정확히 90도 매칭
-                            let phaseVal = Math.sin(diffAngle); 
-                            
-                            // phaseVal > 0 이면 도선 기준 오른쪽 지점(흐려짐), phaseVal < 0 이면 왼쪽 지점(뚜렷함)
-                            let isRightSide = (phaseVal > 0);
+const fieldDirection = Math.sign(c.direction);
 
-                            let grayVal, alpha, strokeStr;
-                            if (isRightSide) {{
-                                // 오른쪽 지점: 흐려짐 (연한 색상, 낮은 불투명도)
-                                grayVal = 190;
-                                alpha = 0.28;
-                                strokeStr = "rgba(140, 140, 140, 0.35)";
-                            }} else {{
-                                // 왼쪽 지점: 뚜렷함 (진한 색상, 높은 불투명도)
-                                grayVal = 15;
-                                alpha = 0.88;
-                                strokeStr = "rgba(0, 0, 0, 0.95)";
-                            }}
+// 자기장이 화면 안으로 들어가는 경우 → 흐리게
+// 자기장이 화면 밖으로 나오는 경우 → 진하게
+let grayVal, alpha, strokeStr;
+
+if (fieldDirection < 0) {
+    // ⊗ 자기장: 화면 안으로 들어감
+    grayVal = 190;
+    alpha = 0.28;
+    strokeStr = "rgba(140, 140, 140, 0.35)";
+} else {
+    // ⊙ 자기장: 화면 밖으로 나옴
+    grayVal = 15;
+    alpha = 0.88;
+    strokeStr = "rgba(0, 0, 0, 0.95)";
+}
+
+let colorStr = `rgba(${grayVal}, ${grayVal + 3}, ${grayVal + 5}, ${alpha.toFixed(2)})`;
+
+ctx.save();
+ctx.translate(screenX, screenY);
+ctx.rotate(tangentAngle);
+
+ctx.beginPath();
+ctx.ellipse(0, 0, 9.0, 2.0, 0, 0, 2 * Math.PI);
+ctx.fillStyle = colorStr;
+ctx.fill();
+
+ctx.strokeStyle = strokeStr;
+ctx.lineWidth = 0.8;
+ctx.stroke();
+
+ctx.restore();
 
                             let colorStr = `rgba(${{grayVal}}, ${{grayVal + 3}}, ${{grayVal + 5}}, ${{alpha.toFixed(2)}})`;
 
