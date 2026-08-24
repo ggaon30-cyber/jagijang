@@ -187,7 +187,7 @@ if not st.session_state.is_running:
     else:
         st.caption("👆 [클릭 비활성화 모드] 화면 조작 시 요소가 추가되지 않습니다.")
 else:
-    st.info("📊 **[자기장 해석 모드]** ")
+    st.info("📊 **[자기장 해석 모드]** 전류 진행 방향의 **왼쪽 지점(⊙)**에서는 입자가 어둡고 진하게, **오른쪽 지점(⊗)**에서는 밝고 연하게 표시됩니다.")
 
 # -----------------------------------------------------------------------------
 # 4. 시각화 엔진 (편집 모드: Plotly / 해석 모드: Native HTML5 Canvas + Plotly)
@@ -289,28 +289,17 @@ else:
 
     circle_info_list = []
     target_pt = st.session_state.target_coord
-
     for wire in st.session_state.wires:
         foot, r_val = get_perpendicular_foot_and_radius(target_pt, wire)
-
         if r_val > 0.05:
-            I_val = get_numeric_current(
-                wire['current_symbol'],
-                st.session_state.symbol_values
-            )
-
-            # 회전 물체의 각 입자 위치에서 실제 자기장 방향을
-            # 다시 계산하기 위해 필요한 정보를 JavaScript로 전달한다.
+            I_val = get_numeric_current(wire['current_symbol'], st.session_state.symbol_values)
             b_mag = abs(I_val / r_val) if wire['type'] == 'straight' else abs(I_val / 0.5)
-
             circle_info_list.append({
                 "foot": [float(foot[0]), float(foot[1])],
                 "radius": float(r_val),
                 "bMag": float(b_mag),
                 "direction": int(wire.get('direction', 1)),
                 "type": str(wire['type']),
-                "current": float(I_val),
-                "bScale": float(wire.get('b_scale', 1.0)),
                 "p1": [float(wire['p1'][0]), float(wire['p1'][1])] if wire['type'] == 'straight' else [0, 0],
                 "p2": [float(wire['p2'][0]), float(wire['p2'][1])] if wire['type'] == 'straight' else [0, 0],
                 "center": [float(wire['center'][0]), float(wire['center'][1])] if wire['type'] == 'circle' else [0, 0]
@@ -354,98 +343,6 @@ else:
                 let val = parseFloat(sym);
                 return isNaN(val) ? (symbols[sym] !== undefined ? symbols[sym] : 1.0) : val;
             }}
-            
-            // -----------------------------------------------------------------
-            // 회전 물체의 각 입자 위치에서 실제 Bz를 계산
-            // -----------------------------------------------------------------
-            // 직선 도선:
-            //   기존 Python 계산과 동일하게 Bz = I/r * sign(cross_z)
-            //
-            // 원형 도선:
-            //   기존 Python의 Biot-Savart 32분할 근사와 동일한 형태로 계산
-            //
-            // 따라서 회전 물체가 어느 위치에 있느냐에 따라
-            // ⊗(들어감) / ⊙(나옴)이 실제로 바뀐다.
-            function calcLocalFieldZ(px, py) {{
-                let totalB = 0.0;
-
-                for (let w of wires) {{
-
-                    if (w.type === 'straight') {{
-                        let x1 = w.p1[0];
-                        let y1 = w.p1[1];
-                        let x2 = w.p2[0];
-                        let y2 = w.p2[1];
-
-                        let dx = (x2 - x1) * (w.direction || 1);
-                        let dy = (y2 - y1) * (w.direction || 1);
-                        let lineLen = Math.hypot(dx, dy);
-
-                        if (lineLen < 1e-6) {{
-                            continue;
-                        }}
-
-                        let crossZ =
-                            dx * (py - y1) -
-                            dy * (px - x1);
-
-                        let r = Math.abs(crossZ) / lineLen;
-
-                        // 기존 Python 계산의 특이점 처리와 동일
-                        if (r < 0.1) {{
-                            continue;
-                        }}
-
-                        let sign = Math.sign(crossZ);
-                        let I = getI(w.current_symbol);
-
-                        totalB += (I / r) * sign;
-                    }}
-                    else if (w.type === 'circle') {{
-                        let cx = w.center[0];
-                        let cy = w.center[1];
-                        let radius = w.radius || 0.5;
-                        let kScale = w.b_scale || 1.0;
-
-                        let numSegments = 32;
-                        let dTheta = 2 * Math.PI / numSegments;
-                        let Bz = 0.0;
-
-                        for (let j = 0; j < numSegments; j++) {{
-                            let a = 2 * Math.PI * j / numSegments;
-
-                            let wx = cx + radius * Math.cos(a);
-                            let wy = cy + radius * Math.sin(a);
-
-                            let dlx =
-                                -radius * Math.sin(a) *
-                                dTheta * (w.direction || 1);
-
-                            let dly =
-                                radius * Math.cos(a) *
-                                dTheta * (w.direction || 1);
-
-                            let rx = px - wx;
-                            let ry = py - wy;
-
-                            let distSq = rx * rx + ry * ry + 0.02;
-                            let dist = Math.sqrt(distSq);
-
-                            Bz +=
-                                (dlx * ry - dly * rx) /
-                                (dist * dist * dist);
-                        }}
-
-                        totalB +=
-                            Bz *
-                            (kScale * getI(w.current_symbol) * radius) /
-                            (2 * Math.PI);
-                    }}
-                }}
-
-                return totalB;
-            }}
-
 
             let traces = [];
 
@@ -549,7 +446,7 @@ else:
             Plotly.newPlot('plotly_canvas', traces, layout);
 
             // -----------------------------------------------------------------
-            // 궤적 애니메이션 엔진 (오른쪽 흐림 / 왼쪽 뚜렷 - 90도 위상 보정 적용)
+            // 이전 버전의 궤적 애니메이션 엔진 복원 + 새로운 오른쪽/왼쪽 명암 규칙 적용
             // -----------------------------------------------------------------
             const pCanvas = document.getElementById('particle_canvas');
             const ctx = pCanvas.getContext('2d');
@@ -624,50 +521,35 @@ else:
                             let screenVy = -vy * (yaxis._length / (yaxis.range[1] - yaxis.range[0]));
                             let tangentAngle = Math.atan2(screenVy, screenVx);
 
-                            // 🎯 회전 물체의 각 위치에서 실제 자기장 방향을 계산
-                            //
-                            // 기존에는 회전각(diffAngle)을 이용해
-                            // '오른쪽/왼쪽'을 임의로 판정했다.
-                            //
-                            // 이제는 현재 입자의 실제 좌표(px, py)에서
-                            // 모든 도선이 만드는 Bz를 계산한다.
-                            //
-                            // Bz < 0 : ⊗ 자기장이 화면 안으로 들어감 → 흐림
-                            // Bz = 0 : 상쇄/전이 영역 → 중간 명암
-                            // Bz > 0 : ⊙ 자기장이 화면 밖으로 나옴 → 진함
+                            // 🎯 [전류 방향 기준 위치 판단]
+                            // crossZ = (도선 진행 방향 ux, uy) × (입자 위치 벡터 px-x1, py-y1)
+                            let isLeft = false;
+                            if (c.type === 'straight') {{
+                                let x1 = c.p1[0], y1 = c.p1[1];
+                                let x2 = c.p2[0], y2 = c.p2[1];
+                                let dx = (x2 - x1) * c.direction;
+                                let dy = (y2 - y1) * c.direction;
+                                let crossZ = dx * (py - y1) - dy * (px - x1);
+                                isLeft = (crossZ >= 0); // 앙페르 왼손/오른나사 법칙: 왼쪽은 ⊙(나옴)
+                            }} else {{
+                                isLeft = (c.direction === 1);
+                            }}
 
-                            let localBz = calcLocalFieldZ(px, py);
-
-                            // 자기장 방향의 전환이 갑자기 일어나지 않도록
-                            // tanh를 이용해 명암을 연속적으로 보간한다.
-                            let fieldScale = Math.max(
-                                0.5,
-                                Math.abs(c.bMag) * 0.35
-                            );
-
-                            // -1 ~ +1
-                            let fieldPhase = Math.tanh(localBz / fieldScale);
-
-                            // ⊗(-1) → 밝음
-                            // ⊙(+1) → 어두움
-                            let darkness = 0.5 + 0.5 * fieldPhase;
-
-                            let grayVal =
-                                190 - 175 * darkness;
-
-                            let alpha =
-                                0.28 + 0.60 * darkness;
-
-                            let strokeAlpha =
-                                0.35 + 0.60 * darkness;
-
-                            let strokeGray =
-                                140 - 140 * darkness;
+                            // 🎨 [명암 적용]
+                            // 왼쪽(나옴 ⊙): 어둡고 진함 (낮은 grayVal, 높은 alpha)
+                            // 오른쪽(들어감 ⊗): 밝고 연함 (높은 grayVal, 낮은 alpha)
+                            let grayVal, alpha, strokeStr;
+                            if (isLeft) {{
+                                grayVal = 15;
+                                alpha = 0.85;
+                                strokeStr = "rgba(0, 0, 0, 0.95)";
+                            }} else {{
+                                grayVal = 190;
+                                alpha = 0.28;
+                                strokeStr = "rgba(140, 140, 140, 0.35)";
+                            }}
 
                             let colorStr = `rgba(${{grayVal}}, ${{grayVal + 3}}, ${{grayVal + 5}}, ${{alpha.toFixed(2)}})`;
-
-                            let strokeStr =
-                                `rgba(${{strokeGray}}, ${{strokeGray}}, ${{strokeGray}}, ${{strokeAlpha.toFixed(2)}})`;
 
                             ctx.save();
                             ctx.translate(screenX, screenY);
