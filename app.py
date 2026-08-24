@@ -299,55 +299,21 @@ else:
                 st.session_state.symbol_values
             )
 
-            if wire['type'] == 'straight':
-                # 기존 자기장 계산과 동일한 방향 판정
-                (x1, y1), (x2, y2) = wire['p1'], wire['p2']
-
-                dx = (x2 - x1) * wire['direction']
-                dy = (y2 - y1) * wire['direction']
-
-                cross_z = (
-                    dx * (target_pt[1] - y1)
-                    - dy * (target_pt[0] - x1)
-                )
-
-                field_sign = int(np.sign(cross_z))
-                b_mag = abs(I_val / r_val)
-
-            else:
-                # 원형 도선 중심의 자기장 방향
-                # direction = +1 → ⊙
-                # direction = -1 → ⊗
-                field_sign = int(np.sign(wire.get('direction', 1)))
-
-                b_mag = abs(I_val / 0.5)
+            # 회전 물체의 각 입자 위치에서 실제 자기장 방향을
+            # 다시 계산하기 위해 필요한 정보를 JavaScript로 전달한다.
+            b_mag = abs(I_val / r_val) if wire['type'] == 'straight' else abs(I_val / 0.5)
 
             circle_info_list.append({
                 "foot": [float(foot[0]), float(foot[1])],
                 "radius": float(r_val),
                 "bMag": float(b_mag),
                 "direction": int(wire.get('direction', 1)),
-
-                # ★ 실제 자기장 방향을 JavaScript로 전달
-                # +1 = ⊙ 화면 밖으로 나옴
-                # -1 = ⊗ 화면 안으로 들어감
-                "fieldSign": field_sign,
-
                 "type": str(wire['type']),
-                "p1": [
-                    float(wire['p1'][0]),
-                    float(wire['p1'][1])
-                ] if wire['type'] == 'straight' else [0, 0],
-
-                "p2": [
-                    float(wire['p2'][0]),
-                    float(wire['p2'][1])
-                ] if wire['type'] == 'straight' else [0, 0],
-
-                "center": [
-                    float(wire['center'][0]),
-                    float(wire['center'][1])
-                ] if wire['type'] == 'circle' else [0, 0]
+                "current": float(I_val),
+                "bScale": float(wire.get('b_scale', 1.0)),
+                "p1": [float(wire['p1'][0]), float(wire['p1'][1])] if wire['type'] == 'straight' else [0, 0],
+                "p2": [float(wire['p2'][0]), float(wire['p2'][1])] if wire['type'] == 'straight' else [0, 0],
+                "center": [float(wire['center'][0]), float(wire['center'][1])] if wire['type'] == 'circle' else [0, 0]
             })
 
     wires_json = json.dumps(st.session_state.wires)
@@ -388,6 +354,98 @@ else:
                 let val = parseFloat(sym);
                 return isNaN(val) ? (symbols[sym] !== undefined ? symbols[sym] : 1.0) : val;
             }}
+            
+            // -----------------------------------------------------------------
+            // 회전 물체의 각 입자 위치에서 실제 Bz를 계산
+            // -----------------------------------------------------------------
+            // 직선 도선:
+            //   기존 Python 계산과 동일하게 Bz = I/r * sign(cross_z)
+            //
+            // 원형 도선:
+            //   기존 Python의 Biot-Savart 32분할 근사와 동일한 형태로 계산
+            //
+            // 따라서 회전 물체가 어느 위치에 있느냐에 따라
+            // ⊗(들어감) / ⊙(나옴)이 실제로 바뀐다.
+            function calcLocalFieldZ(px, py) {{
+                let totalB = 0.0;
+
+                for (let w of wires) {{
+
+                    if (w.type === 'straight') {{
+                        let x1 = w.p1[0];
+                        let y1 = w.p1[1];
+                        let x2 = w.p2[0];
+                        let y2 = w.p2[1];
+
+                        let dx = (x2 - x1) * (w.direction || 1);
+                        let dy = (y2 - y1) * (w.direction || 1);
+                        let lineLen = Math.hypot(dx, dy);
+
+                        if (lineLen < 1e-6) {{
+                            continue;
+                        }}
+
+                        let crossZ =
+                            dx * (py - y1) -
+                            dy * (px - x1);
+
+                        let r = Math.abs(crossZ) / lineLen;
+
+                        // 기존 Python 계산의 특이점 처리와 동일
+                        if (r < 0.1) {{
+                            continue;
+                        }}
+
+                        let sign = Math.sign(crossZ);
+                        let I = getI(w.current_symbol);
+
+                        totalB += (I / r) * sign;
+                    }}
+                    else if (w.type === 'circle') {{
+                        let cx = w.center[0];
+                        let cy = w.center[1];
+                        let radius = w.radius || 0.5;
+                        let kScale = w.b_scale || 1.0;
+
+                        let numSegments = 32;
+                        let dTheta = 2 * Math.PI / numSegments;
+                        let Bz = 0.0;
+
+                        for (let j = 0; j < numSegments; j++) {{
+                            let a = 2 * Math.PI * j / numSegments;
+
+                            let wx = cx + radius * Math.cos(a);
+                            let wy = cy + radius * Math.sin(a);
+
+                            let dlx =
+                                -radius * Math.sin(a) *
+                                dTheta * (w.direction || 1);
+
+                            let dly =
+                                radius * Math.cos(a) *
+                                dTheta * (w.direction || 1);
+
+                            let rx = px - wx;
+                            let ry = py - wy;
+
+                            let distSq = rx * rx + ry * ry + 0.02;
+                            let dist = Math.sqrt(distSq);
+
+                            Bz +=
+                                (dlx * ry - dly * rx) /
+                                (dist * dist * dist);
+                        }}
+
+                        totalB +=
+                            Bz *
+                            (kScale * getI(w.current_symbol) * radius) /
+                            (2 * Math.PI);
+                    }}
+                }}
+
+                return totalB;
+            }}
+
 
             let traces = [];
 
@@ -566,61 +624,50 @@ else:
                             let screenVy = -vy * (yaxis._length / (yaxis.range[1] - yaxis.range[0]));
                             let tangentAngle = Math.atan2(screenVy, screenVx);
 
-                            // 🎯 실제 자기장 방향에 따른 명암 판정
+                            // 🎯 회전 물체의 각 위치에서 실제 자기장 방향을 계산
                             //
-                            // fieldSign은 Python 계산 엔진에서 전달된
-                            // 실제 자기장 Bz의 부호이다.
+                            // 기존에는 회전각(diffAngle)을 이용해
+                            // '오른쪽/왼쪽'을 임의로 판정했다.
                             //
-                            // fieldSign > 0 : ⊙ 화면 밖으로 나오는 자기장
-                            //                  → 물체를 진하게 표시
+                            // 이제는 현재 입자의 실제 좌표(px, py)에서
+                            // 모든 도선이 만드는 Bz를 계산한다.
                             //
-                            // fieldSign < 0 : ⊗ 화면 안으로 들어가는 자기장
-                            //                  → 물체를 흐리게 표시
+                            // Bz < 0 : ⊗ 자기장이 화면 안으로 들어감 → 흐림
+                            // Bz = 0 : 상쇄/전이 영역 → 중간 명암
+                            // Bz > 0 : ⊙ 자기장이 화면 밖으로 나옴 → 진함
 
-                            let grayVal, alpha, strokeStr;
+                            let localBz = calcLocalFieldZ(px, py);
 
-                            if (c.fieldSign < 0) {{
-                                // ⊗ 자기장이 화면 안으로 들어가는 방향
-                                grayVal = 190;
-                                alpha = 0.28;
-                                strokeStr = "rgba(140, 140, 140, 0.35)";
-                            }} else {{
-                                // ⊙ 자기장이 화면 밖으로 나오는 방향
-                                grayVal = 15;
-                                alpha = 0.88;
-                                strokeStr = "rgba(0, 0, 0, 0.95)";
-                            }}
+                            // 자기장 방향의 전환이 갑자기 일어나지 않도록
+                            // tanh를 이용해 명암을 연속적으로 보간한다.
+                            let fieldScale = Math.max(
+                                0.5,
+                                Math.abs(c.bMag) * 0.35
+                            );
+
+                            // -1 ~ +1
+                            let fieldPhase = Math.tanh(localBz / fieldScale);
+
+                            // ⊗(-1) → 밝음
+                            // ⊙(+1) → 어두움
+                            let darkness = 0.5 + 0.5 * fieldPhase;
+
+                            let grayVal =
+                                190 - 175 * darkness;
+
+                            let alpha =
+                                0.28 + 0.60 * darkness;
+
+                            let strokeAlpha =
+                                0.35 + 0.60 * darkness;
+
+                            let strokeGray =
+                                140 - 140 * darkness;
 
                             let colorStr = `rgba(${{grayVal}}, ${{grayVal + 3}}, ${{grayVal + 5}}, ${{alpha.toFixed(2)}})`;
-                            ctx.save();
-                            ctx.translate(screenX, screenY);
-                            ctx.rotate(tangentAngle);
 
-                            ctx.beginPath();
-                            ctx.ellipse(0, 0, 9.0, 2.0, 0, 0, 2 * Math.PI);
-                            ctx.fillStyle = colorStr;
-                            ctx.fill();
-
-                            ctx.strokeStyle = strokeStr;
-                            ctx.lineWidth = 0.8;
-                            ctx.stroke();
-
-                            ctx.restore();
-ctx.save();
-ctx.translate(screenX, screenY);
-ctx.rotate(tangentAngle);
-
-ctx.beginPath();
-ctx.ellipse(0, 0, 9.0, 2.0, 0, 0, 2 * Math.PI);
-ctx.fillStyle = colorStr;
-ctx.fill();
-
-ctx.strokeStyle = strokeStr;
-ctx.lineWidth = 0.8;
-ctx.stroke();
-
-ctx.restore();
-                            let colorStr = `rgba(${{grayVal}}, ${{grayVal + 3}}, ${{grayVal + 5}}, ${{alpha.toFixed(2)}})`;
+                            let strokeStr =
+                                `rgba(${{strokeGray}}, ${{strokeGray}}, ${{strokeGray}}, ${{strokeAlpha.toFixed(2)}})`;
 
                             ctx.save();
                             ctx.translate(screenX, screenY);
