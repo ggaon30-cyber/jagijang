@@ -21,7 +21,7 @@ if "symbol_values" not in st.session_state:
     st.session_state.symbol_values = {"I_0": 1.0}
 
 if "tool_mode" not in st.session_state:
-    st.session_state.tool_mode = "straight"  # "straight", "circle", "point", "select"
+    st.session_state.tool_mode = "straight"
 
 if "p1_temp" not in st.session_state:
     st.session_state.p1_temp = None
@@ -35,7 +35,6 @@ if "is_running" not in st.session_state:
 if "target_coord" not in st.session_state:
     st.session_state.target_coord = (0.0, 0.0)
 
-# 예시 문제 불러오기
 def load_preset_problem():
     st.session_state.wires = [
         {"type": "straight", "name": "A", "p1": (-2.0, -20.0), "p2": (-2.0, 20.0), "current_symbol": "I_A", "direction": -1},
@@ -57,7 +56,7 @@ def load_preset_problem():
     st.session_state.p1_temp = None
 
 # -----------------------------------------------------------------------------
-# 2. 물리 계산 엔진
+# 2. 물리 및 기하 계산 엔진
 # -----------------------------------------------------------------------------
 def get_numeric_current(current_str, symbol_values):
     try:
@@ -106,10 +105,52 @@ def calc_circle_wire_B(x, y, center, radius, I, direction, k_scale=1.0, num_segm
     norm_factor = (k_scale * I * radius) / (2 * np.pi)
     return Bz * norm_factor
 
+def get_perpendicular_foot_and_radius(target_pt, wire):
+    """분석 지점에서 도선으로 내린 수선의 발 좌표와 반지름 계산"""
+    tx, ty = target_pt
+    if wire['type'] == 'straight':
+        (x1, y1), (x2, y2) = wire['p1'], wire['p2']
+        dx, dy = x2 - x1, y2 - y1
+        len_sq = dx**2 + dy**2
+        if len_sq < 1e-8:
+            return (x1, y1), np.hypot(tx - x1, ty - y1)
+        t = ((tx - x1) * dx + (ty - y1) * dy) / len_sq
+        foot_x = x1 + t * dx
+        foot_y = y1 + t * dy
+        radius = np.hypot(tx - foot_x, ty - foot_y)
+        return (foot_x, foot_y), radius
+    elif wire['type'] == 'circle':
+        cx, cy = wire['center']
+        radius = np.hypot(tx - cx, ty - cy)
+        return (cx, cy), radius
+
+def calc_total_B_scalar(px, py, wires, symbol_values):
+    """특정 (px, py) 위치에서의 합성 자기장 세기 계산 (상쇄 여부 측정용)"""
+    total_b = 0.0
+    for w in wires:
+        I_val = get_numeric_current(w['current_symbol'], symbol_values)
+        if w['type'] == 'straight':
+            x1, y1 = w['p1']
+            x2, y2 = w['p2']
+            dx = (x2 - x1) * w['direction']
+            dy = (y2 - y1) * w['direction']
+            line_len = np.hypot(dx, dy)
+            if line_len < 1e-6: continue
+            cross_z = (dx * (py - y1) - dy * (px - x1))
+            r = np.abs(cross_z) / line_len
+            if r < 0.05: continue
+            total_b += (I_val / r) * np.sign(cross_z)
+        elif w['type'] == 'circle':
+            cx, cy = w['center']
+            k = w.get('b_scale', 1.0)
+            if np.hypot(px - cx, py - cy) < 0.1:
+                total_b += (I_val / 0.5) * k * w['direction']
+    return total_b
+
 # -----------------------------------------------------------------------------
 # 3. 메인 인터페이스 & 도선/관찰지점 툴바
 # -----------------------------------------------------------------------------
-st.title("🧲 2D 도선 자기장 플랫폼")
+st.title("🧲 2D 도선 자기장 시각화 플랫폼")
 
 col_mode, col_preset = st.columns([3, 1])
 with col_mode:
@@ -165,18 +206,18 @@ if not st.session_state.is_running:
     elif st.session_state.tool_mode == "circle":
         st.info("⭕ **[원형 도선 모드]** 좌표를 클릭하면 중심 반지름 0.5d 원형 도선이 설치됩니다.")
     elif st.session_state.tool_mode == "point":
-        st.info("📍 **[관찰 지점 모드]** 좌표를 클릭하면 해당 위치에 관찰 지점(p, O, q...)이 즉시 생성됩니다.")
+        st.info("📍 **[관찰 지점 모드]** 좌표를 클릭하면 해당 위치에 관찰 지점이 즉시 생성됩니다.")
     else:
         st.caption("👆 [클릭 비활성화 모드] 화면 조작 시 요소가 추가되지 않습니다.")
 else:
-    st.info("📊 **[자기장 해석 모드]** 좌표평면의 임의 지점이나 설치된 관찰 지점을 클릭하면 해당 위치의 합성 자기장이 즉시 계산됩니다.")
+    st.info("📊 **[자기장 해석 모드]** 임의 지점을 클릭하면 해당 지점을 지나는 각 도선의 자기장 원형 궤적과 흐르는 입자(상쇄 구현)가 표시됩니다.")
 
 # -----------------------------------------------------------------------------
-# 4. 좌표평면 시각화
+# 4. 좌표평면 시각화 (Plotly)
 # -----------------------------------------------------------------------------
 fig = go.Figure()
 
-# 1) 자기장 등고선 (전체 영역 -20d ~ 20d 계산)
+# 1) 전체 자기장 등고선 (-20d ~ 20d)
 if st.session_state.is_running and len(st.session_state.wires) > 0:
     grid_range = np.linspace(-20.0, 20.0, 200)
     X, Y = np.meshgrid(grid_range, grid_range)
@@ -193,21 +234,20 @@ if st.session_state.is_running and len(st.session_state.wires) > 0:
     Z_clipped = np.clip(Z_total, -8, 8)
     fig.add_trace(go.Contour(
         x=grid_range, y=grid_range, z=Z_clipped,
-        colorscale='RdBu_r', zmin=-4, zmax=4, opacity=0.55,
+        colorscale='RdBu_r', zmin=-4, zmax=4, opacity=0.45,
         ncontours=25, showscale=True,
         colorbar=dict(title="자기장 B", tickvals=[-3, 0, 3], ticktext=["⊗ 들어감", "0 상쇄", "⊙ 나옴"])
     ))
 
-# 2) 광범위 격자점 (-20d ~ 20d)
+# 2) 클릭용 배경 격자점
 grid_x, grid_y = np.meshgrid(range(-20, 21), range(-20, 21))
 fig.add_trace(go.Scatter(
     x=grid_x.flatten(), y=grid_y.flatten(),
-    mode='markers',
-    marker=dict(size=10, color='rgba(0,0,0,0.01)'),
+    mode='markers', marker=dict(size=10, color='rgba(0,0,0,0.01)'),
     hoverinfo='x+y', showlegend=False
 ))
 
-# 3) 도선 그려내기
+# 3) 도선 그리기
 for wire in st.session_state.wires:
     sym, name = wire['current_symbol'], wire['name']
     
@@ -252,7 +292,7 @@ for wire in st.session_state.wires:
             text=f"<b><i>{sym}</i></b>", font=dict(size=13, color="black")
         )
 
-# 4) 클릭으로 설치된 관찰 지점들 표시
+# 4) 설치된 관찰 지점
 for pt in st.session_state.points:
     fig.add_trace(go.Scatter(
         x=[pt['x']], y=[pt['y']], mode='markers+text',
@@ -260,6 +300,117 @@ for pt in st.session_state.points:
         text=[f"<b>{pt['name']}</b>"], textposition="top center",
         textfont=dict(size=14, color="#0044cc"), showlegend=False
     ))
+
+# -----------------------------------------------------------------------------
+# 5. 자기장 해석 모드: 수선의 발 궤적 원 & 흘러가는 입자(상쇄 반영) 애니메이션
+# -----------------------------------------------------------------------------
+num_frames = 20
+particles_per_circle = 24
+
+if st.session_state.is_running and len(st.session_state.wires) > 0:
+    target_pt = st.session_state.target_coord
+    
+    # 5-1) 각 도선별 궤적 원(실선 원) 그리기
+    circle_info = []
+    for w_idx, wire in enumerate(st.session_state.wires):
+        foot, r_val = get_perpendicular_foot_and_radius(target_pt, wire)
+        if r_val > 0.05:
+            circle_info.append({
+                "wire": wire,
+                "foot": foot,
+                "radius": r_val
+            })
+            # 원형 궤적 가이드 선
+            theta_line = np.linspace(0, 2*np.pi, 100)
+            fig.add_trace(go.Scatter(
+                x=foot[0] + r_val * np.cos(theta_line),
+                y=foot[1] + r_val * np.sin(theta_line),
+                mode='lines',
+                line=dict(color='rgba(230, 230, 230, 0.7)', width=1.5, dash='dot'),
+                hoverinfo='none', showlegend=False
+            ))
+
+    # 5-2) 프레임 기반 흐르는 입자 위치 & 상쇄 반영 opacity 계산
+    def generate_particle_data(frame_step):
+        px_list, py_list, color_list, size_list = [], [], [], []
+        rot_frac = frame_step / num_frames
+        
+        for c in circle_info:
+            foot_x, foot_y = c["foot"]
+            r_val = c["radius"]
+            wire = c["wire"]
+            rot_dir = wire.get('direction', 1)
+            
+            # 기준 초기각 (target_pt 관통하도록 설정)
+            base_angle = np.arctan2(target_pt[1] - foot_y, target_pt[0] - foot_x)
+            
+            for p_i in range(particles_per_circle):
+                angle = base_angle + (2 * np.pi * p_i / particles_per_circle) + (rot_dir * 2 * np.pi * rot_frac)
+                px = foot_x + r_val * np.cos(angle)
+                py = foot_y + r_val * np.sin(angle)
+                
+                # 위치별 합성 자기장 세기 계산 (상쇄 효과 반영)
+                b_val = calc_total_B_scalar(px, py, st.session_state.wires, st.session_state.symbol_values)
+                b_mag = abs(b_val)
+                
+                # 자기장이 상쇄되는 지점(b_mag ~ 0)에서는 투명해지고 약해짐
+                alpha = np.clip(b_mag / 2.0, 0.05, 0.95)
+                p_size = np.clip(4.0 + b_mag * 2.5, 2.0, 9.0)
+                
+                px_list.append(px)
+                py_list.append(py)
+                color_list.append(f"rgba(240, 240, 245, {alpha:.2f})")
+                size_list.append(p_size)
+                
+        return px_list, py_list, color_list, size_list
+
+    # Initial frame particle trace (Frame 0)
+    init_px, init_py, init_colors, init_sizes = generate_particle_data(0)
+    fig.add_trace(go.Scatter(
+        x=init_px, y=init_py,
+        mode='markers',
+        marker=dict(size=init_sizes, color=init_colors, line=dict(color='rgba(100, 100, 100, 0.3)', width=0.5)),
+        name="자기장 유체 입자", showlegend=False, hoverinfo='none'
+    ))
+
+    # Plotly Frame 생성 (애니메이션 구동용)
+    particle_trace_idx = len(fig.data) - 1
+    frames = []
+    for f_idx in range(num_frames):
+        fx, fy, fcols, fsizes = generate_particle_data(f_idx)
+        frames.append(go.Frame(
+            data=[go.Scatter(
+                x=fx, y=fy,
+                mode='markers',
+                marker=dict(size=fsizes, color=fcols, line=dict(color='rgba(100, 100, 100, 0.3)', width=0.5))
+            )],
+            traces=[particle_trace_idx],
+            name=f"frame_{f_idx}"
+        ))
+    fig.frames = frames
+
+    # 애니메이션 버튼 컨트롤 설정
+    fig.update_layout(
+        updatemenus=[dict(
+            type="buttons",
+            showactive=False,
+            direction="left",
+            x=0.01, y=-0.05,
+            xanchor="left", yanchor="top",
+            buttons=[
+                dict(
+                    label="▶ 자기장 흐름 재생",
+                    method="animate",
+                    args=[None, {"frame": {"duration": 60, "redraw": False}, "fromcurrent": True, "mode": "immediate", "loop": True}]
+                ),
+                dict(
+                    label="⏸️ 일시정지",
+                    method="animate",
+                    args=[[None], {"frame": {"duration": 0, "redraw": False}, "mode": "immediate"}]
+                )
+            ]
+        )]
+    )
 
 # 현재 선택된 해석 계산 대상점 표시 (초록 십자)
 if st.session_state.is_running:
@@ -301,7 +452,7 @@ selected_data = st.plotly_chart(
 )
 
 # -----------------------------------------------------------------------------
-# 5. 좌표 클릭 이벤트 처리 (오차 범위 허용 & 즉시 반영)
+# 6. 좌표 클릭 이벤트 처리 (오차 범위 Snap & 즉시 반영)
 # -----------------------------------------------------------------------------
 if selected_data and "selection" in selected_data and "points" in selected_data["selection"]:
     pts = selected_data["selection"]["points"]
@@ -309,29 +460,22 @@ if selected_data and "selection" in selected_data and "points" in selected_data[
         raw_x = float(pts[0]["x"])
         raw_y = float(pts[0]["y"])
 
-        # 오차범위 보정(Snap) 로직
         matched_coord = None
-        
-        # 1) 설치된 관찰 지점 주변 0.4d 이내 클릭 시 해당 위치로 자동 흡착
         for pt in st.session_state.points:
             if np.hypot(raw_x - pt['x'], raw_y - pt['y']) <= 0.4:
                 matched_coord = (float(pt['x']), float(pt['y']))
                 break
 
-        # 2) 관찰 지점이 없으면 가까운 정수 격자로 흡착 (0.45d 오차 허용)
         if matched_coord is None:
             near_x, near_y = float(round(raw_x)), float(round(raw_y))
             if np.hypot(raw_x - near_x, raw_y - near_y) <= 0.45:
                 matched_coord = (near_x, near_y)
 
         if matched_coord is not None:
-            # [해석 모드] 클릭 즉시 계산 위치 변경
             if st.session_state.is_running:
                 if st.session_state.target_coord != matched_coord:
                     st.session_state.target_coord = matched_coord
                     st.rerun()
-
-            # [편집 모드] 도선 및 관찰 지점 생성
             else:
                 if matched_coord != st.session_state.last_processed_pt:
                     st.session_state.last_processed_pt = matched_coord
@@ -376,11 +520,10 @@ if selected_data and "selection" in selected_data and "points" in selected_data[
                         st.rerun()
 
 # -----------------------------------------------------------------------------
-# 6. 사이드바 제어판
+# 7. 사이드바 제어판
 # -----------------------------------------------------------------------------
 st.sidebar.title("⚙️ 설치 요소 관리")
 
-# 1) 클릭 설치된 관찰 지점 목록 & 관리
 if st.session_state.points:
     st.sidebar.subheader("📍 클릭 설치된 관찰 지점")
     for p_idx, pt in enumerate(st.session_state.points):
@@ -394,7 +537,6 @@ if st.session_state.points:
                 st.session_state.points.pop(p_idx)
                 st.rerun()
 
-# 2) 도선 목록 (방향 전환 버튼을 우측 레이아웃에 직접 노출)
 if st.session_state.wires:
     st.sidebar.subheader("📋 설치된 도선 목록")
     for idx, wire in enumerate(st.session_state.wires):
@@ -426,7 +568,6 @@ if st.session_state.wires:
                 f"  └ 도선 {wire['name']} 중심 계수(k)", value=float(wire.get('b_scale', 1.0)), step=0.1, key=f"bscale_{idx}"
             )
 
-# 3) 미지수 전류 슬라이더
 symbols = {w['current_symbol'] for w in st.session_state.wires if not w['current_symbol'].replace('.','',1).isdigit()}
 if symbols:
     st.sidebar.subheader("🎛️ 미지수 전류 값 슬라이더")
@@ -438,7 +579,7 @@ if symbols:
         )
 
 # -----------------------------------------------------------------------------
-# 7. 해석 모드 수식 및 계산 결과
+# 8. 해석 모드 수식 및 계산 결과
 # -----------------------------------------------------------------------------
 if st.session_state.is_running:
     st.markdown("---")
@@ -451,7 +592,6 @@ if st.session_state.is_running:
         if st.session_state.points:
             pt_options = [f"{pt['name']} ({pt['x']}d, {pt['y']}d)" for pt in st.session_state.points]
             
-            # 현재 target_coord와 일치하는 관찰 지점이 있으면 셀렉트박스 자동 동기화
             matched_idx = 0
             for p_i, pt in enumerate(st.session_state.points):
                 if (pt['x'], pt['y']) == (target_x, target_y):
@@ -473,7 +613,7 @@ if st.session_state.is_running:
                     st.rerun()
 
     with col_info:
-        st.success(f"📍 현재 계산 위치: **X = {target_x}d, Y = {target_y}d** *(좌표평면을 직접 클릭하면 즉시 변경됩니다)*")
+        st.success(f"📍 현재 계산 위치: **X = {target_x}d, Y = {target_y}d** *(좌표평면 클릭 시 즉시 변경 및 입자 궤적 갱신)*")
 
     terms = []
     num_total = 0.0
