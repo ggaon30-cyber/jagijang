@@ -187,7 +187,7 @@ if not st.session_state.is_running:
     else:
         st.caption("👆 [클릭 비활성화 모드] 화면 조작 시 요소가 추가되지 않습니다.")
 else:
-    st.info("📊 **[자기장 해석 모드]** 도선 수직 방향으로 연장된 타원 궤도 위를 고이심률 타원 입자(e ≈ 0.975)가 실시간 회전합니다.")
+    st.info("📊 **[자기장 해석 모드]** 관찰 지점을 통과하는 수직 타원 궤도 위를 입자들이 기존 속도의 70% 수준으로 회전합니다.")
 
 # -----------------------------------------------------------------------------
 # 4. 시각화 엔진 (편집 모드: Plotly / 해석 모드: Native HTML5 Canvas + Plotly)
@@ -273,7 +273,7 @@ if not st.session_state.is_running:
     selected_data = st.plotly_chart(fig, use_container_width=True, on_select="rerun", selection_mode="points", key="interactive_grid")
 
 else:
-    # 📊 [자기장 해석 모드] - 수직 연장 타원 궤도 및 Canvas 기반 고이심률 입자 렌더링
+    # 📊 [자기장 해석 모드] - 관찰 지점 통과 보정 및 70% 감속 처리된 Canvas 애니메이션 엔진
     grid_range = np.linspace(-20.0, 20.0, 150)
     X, Y = np.meshgrid(grid_range, grid_range)
     Z_total = np.zeros_like(X)
@@ -381,9 +381,9 @@ else:
                 colorbar: {{ title: '자기장 B', tickvals: [-3, 0, 3], ticktext: ['⊗ 들어감', '0 상쇄', '⊙ 나옴'] }}
             }});
 
-            // 2) 전선 수직 방향으로 연장된 타원 궤적 (kParallel = 0.65, kPerp = 1.30)
-            const kParallel = 0.65;
-            const kPerp = 1.30;
+            // 2) 관찰 지점을 통과하는 수직 방향 연장 타원 궤적 (kParallel = 0.50, kPerp = 1.00)
+            const kParallel = 0.50;
+            const kPerp = 1.00;
 
             for (let c of circles) {{
                 let ux = 1, uy = 0, nx = 0, ny = 1;
@@ -472,7 +472,7 @@ else:
 
             Plotly.newPlot('plotly_canvas', traces, layout);
 
-            // Canvas 오버레이 기반 60FPS 자발적 애니메이션 엔진
+            // Canvas 오버레이 기반 60FPS 애니메이션 엔진
             const pCanvas = document.getElementById('particle_canvas');
             const ctx = pCanvas.getContext('2d');
             const gd = document.getElementById('plotly_canvas');
@@ -511,7 +511,8 @@ else:
                         if (len > 1e-5) {{ nx = dx / len; ny = dy / len; ux = -ny; uy = nx; }}
                     }}
 
-                    let speedMult = Math.min(Math.max(0.6 + 0.8 * bMag, 0.6), 3.0);
+                    // 기존 속도의 70% 수준으로 조정 (* 0.7)
+                    let speedMult = Math.min(Math.max(0.6 + 0.8 * bMag, 0.6), 3.0) * 0.7;
                     let rOffsets = [0.0];
                     let count = 18;
 
@@ -533,7 +534,7 @@ else:
                             let cosA = Math.cos(angle);
                             let sinA = Math.sin(angle);
 
-                            // 전선 수직 방향 연장 타원 궤도
+                            // 관찰 지점을 정확히 통과하는 수직 연장 타원 궤도
                             let px = footX + (rCurr * kParallel * cosA) * ux + (rCurr * kPerp * sinA) * nx;
                             let py = footY + (rCurr * kParallel * cosA) * uy + (rCurr * kPerp * sinA) * ny;
 
@@ -550,7 +551,7 @@ else:
                             let vy = (-rCurr * kParallel * sinA * uy + rCurr * kPerp * cosA * ny) * rotDir;
 
                             let screenVx = vx * (xaxis._length / (xaxis.range[1] - xaxis.range[0]));
-                            let screenVy = -vy * (yaxis._length / (yaxis.range[1] - yaxis.range[0])); // Canvas Y 반전
+                            let screenVy = -vy * (yaxis._length / (yaxis.range[1] - yaxis.range[0]));
                             let tangentAngle = Math.atan2(screenVy, screenVx);
 
                             let grayVal = 100;
@@ -560,7 +561,7 @@ else:
 
                             let colorStr = `rgba(${{grayVal}}, ${{grayVal + 5}}, ${{grayVal + 10}}, ${{alpha.toFixed(2)}})`;
 
-                            // 고이심률 타원 입자 렌더링 (장축 9.0px, 단축 2.0px -> e ≈ 0.975)
+                            // 고이심률 타원 입자 렌더링
                             ctx.save();
                             ctx.translate(screenX, screenY);
                             ctx.rotate(tangentAngle);
