@@ -573,7 +573,7 @@ else:
                 let bSign = c.bSign !== undefined ? c.bSign : 1;
 
                 // 기준 위치(0) 및 도선 진행 방향 기준 ±3d 오프셋 고리
-                const offsets = [0, -3, 3];
+                const offsets = [0, -4, 4];
                 const dStep = 0.08; // 호(arc) 세그먼트 각도 분할 정밀도
 
                 for (let off of offsets) {{
