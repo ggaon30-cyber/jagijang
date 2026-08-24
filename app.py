@@ -483,20 +483,21 @@ else:
             const ctx = pCanvas.getContext('2d');
             const gd = document.getElementById('plotly_canvas');
 
-            // 원형 도선 내부 전용 얇은 무작위 입자 생성
-            let circleParticles = [];
+            // 원형 도선 내부 전용: 빛줄기(Ray) 생성기
+            let circleRays = [];
             for (let c of circles) {{
                 if (c.type === 'circle') {{
-                    let pArray = [];
-                    let numP = 28;
-                    for (let k = 0; k < numP; k++) {{
-                        pArray.push({{
+                    let rayArray = [];
+                    let numRays = 32; // 방출되는 빛줄기 개수
+                    for (let k = 0; k < numRays; k++) {{
+                        rayArray.push({{
                             angle: Math.random() * 2 * Math.PI,
                             progress: Math.random(),
-                            speed: 0.006 + Math.random() * 0.005
+                            speed: 0.018 + Math.random() * 0.015, // 이동 속도 향상
+                            lenFactor: 0.12 + Math.random() * 0.10 // 광선 길이
                         }});
                     }}
-                    circleParticles.push({{ circle: c, particles: pArray }});
+                    circleRays.push({{ circle: c, rays: rayArray }});
                 }}
             }}
 
@@ -513,7 +514,7 @@ else:
                 let xaxis = gd._fullLayout.xaxis;
                 let yaxis = gd._fullLayout.yaxis;
 
-                // 1) 직선 도선 자기장 (회전 입자 - 원본 유지)
+                // 1) 직선 도선 자기장 (회전 입자)
                 for (let c of circles) {{
                     if (c.type === 'straight') {{
                         let footX = c.foot[0], footY = c.foot[1];
@@ -555,7 +556,7 @@ else:
                                 let screenY = yaxis.l2p(py) + yaxis._offset;
 
                                 let vx = (-rCurr * kParallel * sinA * ux + rCurr * kPerp * cosA * nx) * rotDir;
-                                let vy = (-rCurr * kParallel * sinA * uy + rCurr * kPerp * cosA * ny) * rotDir;
+                                let vy = (-rCurr * kParallel * sinA * uy + rCurr * kPerp * cosA * nx) * rotDir;
 
                                 let screenVx = vx * (xaxis._length / (xaxis.range[1] - xaxis.range[0]));
                                 let screenVy = -vy * (yaxis._length / (yaxis.range[1] - yaxis.range[0]));
@@ -580,51 +581,48 @@ else:
                     }}
                 }}
 
-                // 2) 원형 도선 내부: 매우 얇은 들어감(⊗) / 나옴(⊙) 입자 흐름
-                for (let cp of circleParticles) {{
-                    let c = cp.circle;
+                // 2) 원형 도선 내부: 방출/수축하는 얇은 광선(Ray) 표현
+                for (let cr of circleRays) {{
+                    let c = cr.circle;
                     let cx = c.center[0], cy = c.center[1];
                     let rBound = c.radius || 0.5;
-                    let isOutwards = (c.direction === 1); // ⊙: 중심 -> 외부 / ⊗: 외부 -> 중심
+                    let isOutwards = (c.direction === 1); // ⊙: 중심 -> 외부 방출 / ⊗: 외부 -> 중심 수축
 
-                    for (let p of cp.particles) {{
-                        p.progress += p.speed;
-                        if (p.progress >= 1.0) {{
-                            p.progress = 0.0;
-                            p.angle = Math.random() * 2 * Math.PI; // 리스폰 시 무작위 방향
-                            p.speed = 0.006 + Math.random() * 0.005;
+                    for (let r of cr.rays) {{
+                        r.progress += r.speed;
+                        if (r.progress >= 1.0) {{
+                            r.progress = 0.0;
+                            r.angle = Math.random() * 2 * Math.PI; // 랜덤한 방향으로 재생성
+                            r.speed = 0.018 + Math.random() * 0.015;
+                            r.lenFactor = 0.12 + Math.random() * 0.10;
                         }}
 
-                        let currentR = isOutwards ? p.progress * (rBound * 0.88) : (1.0 - p.progress) * (rBound * 0.88);
-                        let px = cx + currentR * Math.cos(p.angle);
-                        let py = cy + currentR * Math.sin(p.angle);
+                        let pHead = isOutwards ? r.progress : (1.0 - r.progress);
+                        let pTail = isOutwards ? Math.max(0, pHead - r.lenFactor) : Math.min(1.0, pHead + r.lenFactor);
 
-                        let screenX = xaxis.l2p(px) + xaxis._offset;
-                        let screenY = yaxis.l2p(py) + yaxis._offset;
+                        let rHead = pHead * (rBound * 0.85);
+                        let rTail = pTail * (rBound * 0.85);
 
-                        // 한결 얇아진 크기 및 알파값
-                        let size = isOutwards ? (0.6 + p.progress * 1.8) : (2.4 - p.progress * 1.8);
-                        let alpha = Math.sin(p.progress * Math.PI) * 0.8;
+                        let hx = cx + rHead * Math.cos(r.angle);
+                        let hy = cy + rHead * Math.sin(r.angle);
+                        let tx = cx + rTail * Math.cos(r.angle);
+                        let ty = cy + rTail * Math.sin(r.angle);
+
+                        let screenHx = xaxis.l2p(hx) + xaxis._offset;
+                        let screenHy = yaxis.l2p(hy) + yaxis._offset;
+                        let screenTx = xaxis.l2p(tx) + xaxis._offset;
+                        let screenTy = yaxis.l2p(ty) + yaxis._offset;
+
+                        let alpha = Math.sin(r.progress * Math.PI) * 0.85;
 
                         ctx.save();
-                        if (isOutwards) {{
-                            // ⊙ (나옴): 얇은 단일 점
-                            ctx.beginPath();
-                            ctx.arc(screenX, screenY, Math.max(size * 0.6, 0.5), 0, 2 * Math.PI);
-                            ctx.fillStyle = `rgba(20, 20, 20, ${{alpha.toFixed(2)}})`;
-                            ctx.fill();
-                        }} else {{
-                            // ⊗ (들어감): 얇고 선명한 십자 형태
-                            let s = Math.max(size * 0.7, 0.8);
-                            ctx.beginPath();
-                            ctx.moveTo(screenX - s, screenY - s);
-                            ctx.lineTo(screenX + s, screenY + s);
-                            ctx.moveTo(screenX + s, screenY - s);
-                            ctx.lineTo(screenX - s, screenY + s);
-                            ctx.strokeStyle = `rgba(30, 30, 30, ${{alpha.toFixed(2)}})`;
-                            ctx.lineWidth = 0.7;
-                            ctx.stroke();
-                        }}
+                        ctx.beginPath();
+                        ctx.moveTo(screenTx, screenTy);
+                        ctx.lineTo(screenHx, screenHy);
+                        ctx.strokeStyle = `rgba(20, 20, 20, ${{alpha.toFixed(2)}})`;
+                        ctx.lineWidth = 0.9;
+                        ctx.lineCap = "round";
+                        ctx.stroke();
                         ctx.restore();
                     }}
                 }}
