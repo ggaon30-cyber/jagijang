@@ -585,7 +585,7 @@ else:
                 colorbar: {{ title: '자기장 B', tickvals: [-3, 0, 3], ticktext: ['⊗ 들어감', '0 상쇄', '⊙ 나옴'] }}
             }});
 
-            // 2) 직선 도선용 궤적 점선 (이심률 높은 타원)
+            // 2) 직선 도선용 궤적 점선
             const kParallel = 0.35;
             const kPerp = 1.00;
 
@@ -704,9 +704,7 @@ else:
                 let xaxis = gd._fullLayout.xaxis;
                 let yaxis = gd._fullLayout.yaxis;
 
-                // -------------------------------------------------------------
-                // (1) 직선 도선 자기장: 140% 속도 & 위상별 페이드인/아웃 연출
-                // -------------------------------------------------------------
+                // (1) 직선 도선 자기장: 단계별(Binary Step) 명확한 페이드 전환
                 for (let c of straightCircles) {{
                     let footX = c.foot[0], footY = c.foot[1];
                     let rBase = c.radius;
@@ -720,7 +718,6 @@ else:
                     let ux = 1, uy = 0, nx = 0, ny = 1;
                     if (len > 1e-5) {{ ux = dx / len; uy = dy / len; nx = -uy; ny = ux; }}
 
-                    // 기존 속도의 140% 상향 (0.5 -> 0.7 배율)
                     let speedMult = Math.min(Math.max(0.5 + 0.6 * bMag, 0.5), 2.5) * 0.7;
                     let rOffsets = [0.0];
                     let count = 16;
@@ -743,8 +740,14 @@ else:
 
                             let bNet = calcTotalB(px, py);
 
-                            // 자기장 방향(bSign)과 위상에 따른 투명도 조절
-                            let posFactor = 0.5 + 0.5 * bSign * Math.cos(angle - baseAngle);
+                            // --- [수정] 관찰 지점 및 반대 지점 기준 이분법적 전환 ---
+                            let normAngle = (angle - baseAngle) % (2 * Math.PI);
+                            if (normAngle < 0) normAngle += 2 * Math.PI;
+
+                            let isObsToOpp = (rotDir === 1) ? (normAngle < Math.PI) : (normAngle >= Math.PI);
+                            let isBright = (bSign === 1) ? isObsToOpp : !isObsToOpp;
+                            let posFactor = isBright ? 1.0 : 0.0;
+
                             let baseAlpha = Math.min((Math.abs(bNet) / 1.5) * 0.85, 0.80);
                             let alpha = baseAlpha * (0.15 + 0.85 * posFactor);
 
@@ -778,9 +781,7 @@ else:
                     }}
                 }}
 
-                // -------------------------------------------------------------
                 // (2) 원형 도선 중심 광선 연출
-                // -------------------------------------------------------------
                 for (let cr of circleRays) {{
                     let c = cr.circle;
                     let cx = c.center[0], cy = c.center[1];
