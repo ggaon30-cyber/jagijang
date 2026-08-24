@@ -584,31 +584,45 @@ else:
                 colorbar: {{ title: '자기장 B', tickvals: [-3, 0, 3], ticktext: ['⊗ 들어감', '0 상쇄', '⊙ 나옴'] }}
             }});
 
-            // 2) 직선 도선용 궤적 점선
+            /
+            // 2) 직선 도선용 궤적 점선 (기준 위치 및 ±5d 오프셋 위치 옅은 고리 추가)
             const kParallel = 0.35;
             const kPerp = 1.00;
 
-            for (let c of straightCircles) {{
+            for (let c of straightCircles) {
                 let ux = 1, uy = 0, nx = 0, ny = 1;
                 let dx = (c.p2[0] - c.p1[0]) * c.direction;
                 let dy = (c.p2[1] - c.p1[1]) * c.direction;
                 let len = Math.hypot(dx, dy);
-                if (len > 1e-5) {{ ux = dx / len; uy = dy / len; nx = -uy; ny = ux; }}
+                if (len > 1e-5) { ux = dx / len; uy = dy / len; nx = -uy; ny = ux; }
 
-                let gx = [], gy = [];
-                for (let a = 0; a <= 2*Math.PI; a += 0.04) {{
-                    let xOff = c.radius * kParallel * Math.cos(a) * ux + c.radius * kPerp * Math.sin(a) * nx;
-                    let yOff = c.radius * kParallel * Math.cos(a) * uy + c.radius * kPerp * Math.sin(a) * ny;
-                    gx.push(c.foot[0] + xOff);
-                    gy.push(c.foot[1] + yOff);
-                }}
-                traces.push({{
-                    x: gx, y: gy, mode: 'lines',
-                    line: {{ color: 'rgba(140, 140, 155, 0.55)', width: 1.1, dash: 'dot' }},
-                    hoverinfo: 'none', showlegend: false
-                }});
-            }}
+                // 기준 위치(0) 및 도선 진행 방향 기준 ±5d 위치 추가
+                const offsets = [0, -5, 5];
 
+                for (let off of offsets) {
+                    let centerFootX = c.foot[0] + off * ux;
+                    let centerFootY = c.foot[1] + off * uy;
+
+                    let gx = [], gy = [];
+                    for (let a = 0; a <= 2 * Math.PI; a += 0.04) {
+                        let xOff = c.radius * kParallel * Math.cos(a) * ux + c.radius * kPerp * Math.sin(a) * nx;
+                        let yOff = c.radius * kParallel * Math.cos(a) * uy + c.radius * kPerp * Math.sin(a) * ny;
+                        gx.push(centerFootX + xOff);
+                        gy.push(centerFootY + yOff);
+                    }
+
+                    let isMain = (off === 0);
+                    traces.push({
+                        x: gx, y: gy, mode: 'lines',
+                        line: {
+                            color: isMain ? 'rgba(140, 140, 155, 0.55)' : 'rgba(140, 140, 155, 0.22)',
+                            width: isMain ? 1.1 : 0.75,
+                            dash: 'dot'
+                        },
+                        hoverinfo: 'none', showlegend: false
+                    });
+                }
+            }
             // 3) Wires
             for (let w of wires) {{
                 if (w.type === 'straight') {{
