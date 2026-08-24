@@ -584,7 +584,7 @@ else:
                 colorbar: {{ title: '자기장 B', tickvals: [-3, 0, 3], ticktext: ['⊗ 들어감', '0 상쇄', '⊙ 나옴'] }}
             }});
 
-            // 2) 직선 도선용 궤적 점선 (기준 위치 및 ±5d 오프셋 위치 옅은 고리 추가)
+            // 2) 직선 도선용 궤적 점선 (±3d 위치 반영 및 선명도 강화)
             const kParallel = 0.35;
             const kPerp = 1.00;
 
@@ -595,8 +595,8 @@ else:
                 let len = Math.hypot(dx, dy);
                 if (len > 1e-5) {{ ux = dx / len; uy = dy / len; nx = -uy; ny = ux; }}
 
-                // 기준 위치(0) 및 도선 진행 방향 기준 ±5d 위치 추가
-                const offsets = [0, -5, 5];
+                // 기준 위치(0) 및 도선 진행 방향 기준 ±3d 위치 설정
+                const offsets = [0, -3, 3];
 
                 for (let off of offsets) {{
                     let centerFootX = c.foot[0] + off * ux;
@@ -614,9 +614,10 @@ else:
                     traces.push({{
                         x: gx, y: gy, mode: 'lines',
                         line: {{
-                            color: isMain ? 'rgba(140, 140, 155, 0.55)' : 'rgba(140, 140, 155, 0.22)',
-                            width: isMain ? 1.1 : 0.75,
-                            dash: 'dot'
+                            // 기준 고리는 진한 검은색 계열(85%), 보조 고리(±3d)는 명확한 짙은 회색(65%)
+                            color: isMain ? 'rgba(30, 30, 40, 0.85)' : 'rgba(70, 70, 90, 0.65)',
+                            width: isMain ? 1.8 : 1.3,
+                            dash: isMain ? 'dash' : 'dot'
                         }},
                         hoverinfo: 'none', showlegend: false
                     }});
@@ -717,7 +718,7 @@ else:
                 let xaxis = gd._fullLayout.xaxis;
                 let yaxis = gd._fullLayout.yaxis;
 
-                // (1) 직선 도선 자기장: 장축 기준 95% <-> 70% 즉시 단계 전환
+                // (1) 직선 도선 자기장: 장축 기준 90% <-> 25% 명확한 단계 전환
                 for (let c of straightCircles) {{
                     let footX = c.foot[0], footY = c.foot[1];
                     let rBase = c.radius;
@@ -743,7 +744,6 @@ else:
                     for (let rOff of rOffsets) {{
                         let rCurr = rBase + rOff;
                         for (let i = 0; i < count; i++) {{
-                            // 매개변수 각도 (sinA = 1 일 때 장축 위치인 관찰 지점에 도달)
                             let localTheta = (2 * Math.PI * i / count) + (rotDir * 2 * Math.PI * rotFrac * speedMult);
 
                             let cosA = Math.cos(localTheta);
@@ -752,18 +752,15 @@ else:
                             let px = footX + (rCurr * kParallel * cosA) * ux + (rCurr * kPerp * sinA) * nx;
                             let py = footY + (rCurr * kParallel * cosA) * uy + (rCurr * kPerp * sinA) * ny;
 
-                            // 각도 정규화 [0, 2*PI)
                             let thetaNorm = localTheta % (2 * Math.PI);
                             if (thetaNorm < 0) thetaNorm += 2 * Math.PI;
 
-                            // 장축 경계(0.5*PI ~ 1.5*PI) 판별: 관찰 지점(0.5*PI)과 정반대 지점(1.5*PI)
                             let isObsToOpp = (rotDir === 1)
                                 ? (thetaNorm >= 0.5 * Math.PI && thetaNorm < 1.5 * Math.PI)
                                 : (thetaNorm < 0.5 * Math.PI || thetaNorm >= 1.5 * Math.PI);
 
                             let isBright = (bSign === 1) ? isObsToOpp : !isObsToOpp;
 
-                            // 점진적 변화 없이 95%(0.95)와 70%(0.70)로 단칼에 전환
                             let alpha = isBright ? 0.90 : 0.25;
 
                             let screenX = xaxis.l2p(px) + xaxis._offset;
