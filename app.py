@@ -754,7 +754,7 @@ else:
                                 : (thetaNorm < 0.5 * Math.PI || thetaNorm >= 1.5 * Math.PI);
 
                             let isBright = (bSign === 1) ? isObsToOpp : !isObsToOpp;
-                            let alpha = isBright ? 0.90 : 0.25;
+                            let alpha = isBright ? 0.90 : 0.15;
 
                             let screenX = xaxis.l2p(px) + xaxis._offset;
                             let screenY = yaxis.l2p(py) + yaxis._offset;
