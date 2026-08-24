@@ -297,6 +297,13 @@ else:
         if wire['type'] == 'straight' and r_val > 0.05:
             I_val = get_numeric_current(wire['current_symbol'], st.session_state.symbol_values)
             b_mag = abs(I_val / r_val)
+
+            (x1, y1), (x2, y2) = wire['p1'], wire['p2']
+            dx = (x2 - x1) * wire['direction']
+            dy = (y2 - y1) * wire['direction']
+            cross_z = dx * (target_pt[1] - y1) - dy * (target_pt[0] - x1)
+            b_sign = 1 if cross_z >= 0 else -1
+            
             straight_info_list.append({
                 "foot": [float(foot[0]), float(foot[1])],
                 "radius": float(r_val),
