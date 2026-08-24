@@ -554,13 +554,13 @@ else:
                             let py = footY + (rCurr * kParallel * cosA) * uy + (rCurr * kPerp * sinA) * ny;
 
                             let bNet = calcTotalB(px, py);
-                            // 진하기 약 -15% 축소 조정
-                            let alpha = Math.min((Math.abs(bNet) / 1.5) * 0.85, 0.80);
-                            if (alpha < 0.05) continue;
+                            let posFactor = 0.5 + 0.5 * bSign * Math.cos(angle - baseAngle);
+                            let baseAlpha = Math.min((Math.abs(bNet) / 1.5) * 0.85, 0.80);
+                            let alpha = baseAlpha * (0.15 + 0.85 * posFactor); // 최소 투명도 보장
+                            if (alpha < 0.03) continue;
 
                             let screenX = xaxis.l2p(px) + xaxis._offset;
                             let screenY = yaxis.l2p(py) + yaxis._offset;
-
                             let vx = (-rCurr * kParallel * sinA * ux + rCurr * kPerp * cosA * nx) * rotDir;
                             let vy = (-rCurr * kParallel * sinA * uy + rCurr * kPerp * cosA * ny) * rotDir;
 
