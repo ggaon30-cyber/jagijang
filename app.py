@@ -288,40 +288,38 @@ else:
 
     Z_clipped = np.clip(Z_total, -8, 8).tolist()
 
+    # (1) 직선 도선용 애니메이션 정보와 (2) 원형 도선용 애니메이션 정보를 독립된 구조로 분리
+    straight_info_list = []
     circle_info_list = []
     target_pt = st.session_state.target_coord
+
     for wire in st.session_state.wires:
         foot, r_val = get_perpendicular_foot_and_radius(target_pt, wire)
         if wire['type'] == 'straight' and r_val > 0.05:
             I_val = get_numeric_current(wire['current_symbol'], st.session_state.symbol_values)
             b_mag = abs(I_val / r_val)
-            circle_info_list.append({
+            straight_info_list.append({
                 "foot": [float(foot[0]), float(foot[1])],
                 "radius": float(r_val),
                 "bMag": float(b_mag),
                 "direction": int(wire.get('direction', 1)),
-                "type": "straight",
                 "p1": [float(wire['p1'][0]), float(wire['p1'][1])],
-                "p2": [float(wire['p2'][0]), float(wire['p2'][1])],
-                "center": [0, 0]
+                "p2": [float(wire['p2'][0]), float(wire['p2'][1])]
             })
         elif wire['type'] == 'circle':
             I_val = get_numeric_current(wire['current_symbol'], st.session_state.symbol_values)
             circle_info_list.append({
-                "foot": [0, 0],
+                "center": [float(wire['center'][0]), float(wire['center'][1])],
                 "radius": float(wire.get('radius', 0.5)),
                 "bMag": float(abs(I_val / 0.5)),
-                "direction": int(wire.get('direction', 1)),
-                "type": "circle",
-                "p1": [0, 0],
-                "p2": [0, 0],
-                "center": [float(wire['center'][0]), float(wire['center'][1])]
+                "direction": int(wire.get('direction', 1))
             })
 
     wires_json = json.dumps(st.session_state.wires)
     points_json = json.dumps(st.session_state.points)
     symbols_json = json.dumps(st.session_state.symbol_values)
     target_json = json.dumps(st.session_state.target_coord)
+    straights_json = json.dumps(straight_info_list)
     circles_json = json.dumps(circle_info_list)
     grid_x_json = json.dumps(grid_range.tolist())
     z_json = json.dumps(Z_clipped)
@@ -348,7 +346,8 @@ else:
             const points = {points_json};
             const symbols = {symbols_json};
             const targetPt = {target_json};
-            const circles = {circles_json};
+            const straightCircles = {straights_json};
+            const circleWires = {circles_json};
             const gridX = {grid_x_json};
             const zData = {z_json};
 
@@ -393,12 +392,11 @@ else:
                 colorbar: {{ title: '자기장 B', tickvals: [-3, 0, 3], ticktext: ['⊗ 들어감', '0 상쇄', '⊙ 나옴'] }}
             }});
 
-            // 2) 직선 도선용 관찰 지점 통과 궤적
+            // 2) 직선 도선용 관찰 지점 통과 궤적 점선 (독립)
             const kParallel = 0.50;
             const kPerp = 1.00;
 
-            for (let c of circles) {{
-                if (c.type !== 'straight') continue;
+            for (let c of straightCircles) {{
                 let ux = 1, uy = 0, nx = 0, ny = 1;
                 let dx = (c.p2[0] - c.p1[0]) * c.direction;
                 let dy = (c.p2[1] - c.p1[1]) * c.direction;
@@ -483,22 +481,20 @@ else:
             const ctx = pCanvas.getContext('2d');
             const gd = document.getElementById('plotly_canvas');
 
-            // 원형 도선 내부 전용: 빛줄기(Ray) 생성기
+            // (2) 원형 도선 전용 독립 객체: 광선 생성기
             let circleRays = [];
-            for (let c of circles) {{
-                if (c.type === 'circle') {{
-                    let rayArray = [];
-                    let numRays = 32; // 방출되는 빛줄기 개수
-                    for (let k = 0; k < numRays; k++) {{
-                        rayArray.push({{
-                            angle: Math.random() * 2 * Math.PI,
-                            progress: Math.random(),
-                            speed: 0.018 + Math.random() * 0.015, // 이동 속도 향상
-                            lenFactor: 0.12 + Math.random() * 0.10 // 광선 길이
-                        }});
-                    }}
-                    circleRays.push({{ circle: c, rays: rayArray }});
+            for (let c of circleWires) {{
+                let rayArray = [];
+                let numRays = 32;
+                for (let k = 0; k < numRays; k++) {{
+                    rayArray.push({{
+                        angle: Math.random() * 2 * Math.PI,
+                        progress: Math.random(),
+                        speed: 0.018 + Math.random() * 0.015,
+                        lenFactor: 0.12 + Math.random() * 0.10
+                    }});
                 }}
+                circleRays.push({{ circle: c, rays: rayArray }});
             }}
 
             let frameStep = 0;
@@ -514,85 +510,88 @@ else:
                 let xaxis = gd._fullLayout.xaxis;
                 let yaxis = gd._fullLayout.yaxis;
 
-                // 1) 직선 도선 자기장 (회전 입자)
-                for (let c of circles) {{
-                    if (c.type === 'straight') {{
-                        let footX = c.foot[0], footY = c.foot[1];
-                        let rBase = c.radius;
-                        let bMag = c.bMag;
-                        let rotDir = c.direction;
+                // -------------------------------------------------------------
+                // 엔진 (1) 직선 도선 자기장: 점선 궤적 상의 회전 입자
+                // -------------------------------------------------------------
+                for (let c of straightCircles) {{
+                    let footX = c.foot[0], footY = c.foot[1];
+                    let rBase = c.radius;
+                    let bMag = c.bMag;
+                    let rotDir = c.direction;
 
-                        let dx = (c.p2[0] - c.p1[0]) * c.direction;
-                        let dy = (c.p2[1] - c.p1[1]) * c.direction;
-                        let len = Math.hypot(dx, dy);
-                        let ux = 1, uy = 0, nx = 0, ny = 1;
-                        if (len > 1e-5) {{ ux = dx / len; uy = dy / len; nx = -uy; ny = ux; }}
+                    let dx = (c.p2[0] - c.p1[0]) * c.direction;
+                    let dy = (c.p2[1] - c.p1[1]) * c.direction;
+                    let len = Math.hypot(dx, dy);
+                    let ux = 1, uy = 0, nx = 0, ny = 1;
+                    if (len > 1e-5) {{ ux = dx / len; uy = dy / len; nx = -uy; ny = ux; }}
 
-                        let speedMult = Math.min(Math.max(0.6 + 0.8 * bMag, 0.6), 3.0) * 0.7;
-                        let rOffsets = [0.0];
-                        let count = 18;
+                    let speedMult = Math.min(Math.max(0.6 + 0.8 * bMag, 0.6), 3.0) * 0.7;
+                    let rOffsets = [0.0];
+                    let count = 18;
 
-                        if (bMag >= 1.5) {{ rOffsets = [-0.03, 0.0, 0.03]; count = 28; }}
-                        else if (bMag >= 0.7) {{ rOffsets = [-0.025, 0.025]; count = 22; }}
+                    if (bMag >= 1.5) {{ rOffsets = [-0.03, 0.0, 0.03]; count = 28; }}
+                    else if (bMag >= 0.7) {{ rOffsets = [-0.025, 0.025]; count = 22; }}
 
-                        let baseAngle = Math.atan2(targetPt[1] - footY, targetPt[0] - footX);
-                        let rotFrac = (frameStep % 200) / 200.0;
+                    let baseAngle = Math.atan2(targetPt[1] - footY, targetPt[0] - footX);
+                    let rotFrac = (frameStep % 200) / 200.0;
 
-                        for (let rOff of rOffsets) {{
-                            let rCurr = rBase + rOff;
-                            for (let i = 0; i < count; i++) {{
-                                let angle = baseAngle + (2 * Math.PI * i / count) + (rotDir * 2 * Math.PI * rotFrac * speedMult);
-                                let cosA = Math.cos(angle);
-                                let sinA = Math.sin(angle);
+                    for (let rOff of rOffsets) {{
+                        let rCurr = rBase + rOff;
+                        for (let i = 0; i < count; i++) {{
+                            let angle = baseAngle + (2 * Math.PI * i / count) + (rotDir * 2 * Math.PI * rotFrac * speedMult);
+                            let cosA = Math.cos(angle);
+                            let sinA = Math.sin(angle);
 
-                                let px = footX + (rCurr * kParallel * cosA) * ux + (rCurr * kPerp * sinA) * nx;
-                                let py = footY + (rCurr * kParallel * cosA) * uy + (rCurr * kPerp * sinA) * ny;
+                            let px = footX + (rCurr * kParallel * cosA) * ux + (rCurr * kPerp * sinA) * nx;
+                            let py = footY + (rCurr * kParallel * cosA) * uy + (rCurr * kPerp * sinA) * ny;
 
-                                let bNet = calcTotalB(px, py);
-                                let alpha = Math.min(Math.abs(bNet) / 1.5, 0.90);
-                                if (alpha < 0.05) continue;
+                            let bNet = calcTotalB(px, py);
+                            let alpha = Math.min(Math.abs(bNet) / 1.5, 0.90);
+                            if (alpha < 0.05) continue;
 
-                                let screenX = xaxis.l2p(px) + xaxis._offset;
-                                let screenY = yaxis.l2p(py) + yaxis._offset;
+                            let screenX = xaxis.l2p(px) + xaxis._offset;
+                            let screenY = yaxis.l2p(py) + yaxis._offset;
 
-                                let vx = (-rCurr * kParallel * sinA * ux + rCurr * kPerp * cosA * nx) * rotDir;
-                                let vy = (-rCurr * kParallel * sinA * uy + rCurr * kPerp * cosA * nx) * rotDir;
+                            // 오타 수정: vy 성분의 수직벡터 ny 교정
+                            let vx = (-rCurr * kParallel * sinA * ux + rCurr * kPerp * cosA * nx) * rotDir;
+                            let vy = (-rCurr * kParallel * sinA * uy + rCurr * kPerp * cosA * ny) * rotDir;
 
-                                let screenVx = vx * (xaxis._length / (xaxis.range[1] - xaxis.range[0]));
-                                let screenVy = -vy * (yaxis._length / (yaxis.range[1] - yaxis.range[0]));
-                                let tangentAngle = Math.atan2(screenVy, screenVx);
+                            let screenVx = vx * (xaxis._length / (xaxis.range[1] - xaxis.range[0]));
+                            let screenVy = -vy * (yaxis._length / (yaxis.range[1] - yaxis.range[0]));
+                            let tangentAngle = Math.atan2(screenVy, screenVx);
 
-                                let grayVal = bMag >= 1.2 ? 25 : (bMag >= 0.6 ? 70 : 140);
-                                let colorStr = `rgba(${{grayVal}}, ${{grayVal + 5}}, ${{grayVal + 10}}, ${{alpha.toFixed(2)}})`;
+                            let grayVal = bMag >= 1.2 ? 25 : (bMag >= 0.6 ? 70 : 140);
+                            let colorStr = `rgba(${{grayVal}}, ${{grayVal + 5}}, ${{grayVal + 10}}, ${{alpha.toFixed(2)}})`;
 
-                                ctx.save();
-                                ctx.translate(screenX, screenY);
-                                ctx.rotate(tangentAngle);
-                                ctx.beginPath();
-                                ctx.ellipse(0, 0, 9.0, 2.0, 0, 0, 2 * Math.PI);
-                                ctx.fillStyle = colorStr;
-                                ctx.fill();
-                                ctx.strokeStyle = `rgba(10, 10, 10, ${{Math.min(alpha + 0.1, 1.0)}})`;
-                                ctx.lineWidth = 0.8;
-                                ctx.stroke();
-                                ctx.restore();
-                            }}
+                            ctx.save();
+                            ctx.translate(screenX, screenY);
+                            ctx.rotate(tangentAngle);
+                            ctx.beginPath();
+                            ctx.ellipse(0, 0, 9.0, 2.0, 0, 0, 2 * Math.PI);
+                            ctx.fillStyle = colorStr;
+                            ctx.fill();
+                            ctx.strokeStyle = `rgba(10, 10, 10, ${{Math.min(alpha + 0.1, 1.0)}})`;
+                            ctx.lineWidth = 0.8;
+                            ctx.stroke();
+                            ctx.restore();
                         }}
                     }}
                 }}
 
-                // 2) 원형 도선 내부: 방출/수축하는 얇은 광선(Ray) 표현
+                // -------------------------------------------------------------
+                // 엔진 (2) 원형 도선 중심: 독립 방출/수축 광선 (Ray)
+                // -------------------------------------------------------------
                 for (let cr of circleRays) {{
                     let c = cr.circle;
                     let cx = c.center[0], cy = c.center[1];
                     let rBound = c.radius || 0.5;
-                    let isOutwards = (c.direction === 1); // ⊙: 중심 -> 외부 방출 / ⊗: 외부 -> 중심 수축
+                    let isOutwards = (c.direction === 1);
 
                     for (let r of cr.rays) {{
                         r.progress += r.speed;
                         if (r.progress >= 1.0) {{
                             r.progress = 0.0;
-                            r.angle = Math.random() * 2 * Math.PI; // 랜덤한 방향으로 재생성
+                            r.angle = Math.random() * 2 * Math.PI;
                             r.speed = 0.018 + Math.random() * 0.015;
                             r.lenFactor = 0.12 + Math.random() * 0.10;
                         }}
