@@ -187,10 +187,10 @@ if not st.session_state.is_running:
     else:
         st.caption("👆 [클릭 비활성화 모드] 화면 조작 시 요소가 추가되지 않습니다.")
 else:
-    st.info("📊 **[자기장 해석 모드]** 관찰 지점($P$)과 대칭 반대편 지점($P_{opp}$) 2곳에서 나오는 자기장(⊙)은 **진하게**, 들어가는 자기장(⊗)은 **연하게** 시각화됩니다.")
+    st.info("📊 **[자기장 해석 모드]** 전류 진행 방향의 **왼쪽 지점(⊙)**에서는 입자가 어둡고 진하게, **오른쪽 지점(⊗)**에서는 밝고 연하게 표시됩니다.")
 
 # -----------------------------------------------------------------------------
-# 4. 시각화 엔진 (편집 모드: Plotly / 해석 모드: HTML5 Canvas + Plotly)
+# 4. 시각화 엔진 (편집 모드: Plotly / 해석 모드: Native HTML5 Canvas + Plotly)
 # -----------------------------------------------------------------------------
 if not st.session_state.is_running:
     import plotly.graph_objects as go
@@ -294,26 +294,15 @@ else:
         if r_val > 0.05:
             I_val = get_numeric_current(wire['current_symbol'], st.session_state.symbol_values)
             b_mag = abs(I_val / r_val) if wire['type'] == 'straight' else abs(I_val / 0.5)
-            
-            # 수직 벡터 계산 (수선의 발 기준)
-            if wire['type'] == 'straight':
-                (x1, y1), (x2, y2) = wire['p1'], wire['p2']
-                dx = (x2 - x1) * wire['direction']
-                dy = (y2 - y1) * wire['direction']
-                cross_z = dx * (target_pt[1] - y1) - dy * (target_pt[0] - x1)
-                b_dir_p = 1 if cross_z >= 0 else -1
-            else:
-                b_dir_p = 1 if wire['direction'] == 1 else -1
-
             circle_info_list.append({
                 "foot": [float(foot[0]), float(foot[1])],
                 "radius": float(r_val),
                 "bMag": float(b_mag),
-                "bDirP": int(b_dir_p),
                 "direction": int(wire.get('direction', 1)),
                 "type": str(wire['type']),
                 "p1": [float(wire['p1'][0]), float(wire['p1'][1])] if wire['type'] == 'straight' else [0, 0],
-                "p2": [float(wire['p2'][0]), float(wire['p2'][1])] if wire['type'] == 'straight' else [0, 0]
+                "p2": [float(wire['p2'][0]), float(wire['p2'][1])] if wire['type'] == 'straight' else [0, 0],
+                "center": [float(wire['center'][0]), float(wire['center'][1])] if wire['type'] == 'circle' else [0, 0]
             })
 
     wires_json = json.dumps(st.session_state.wires)
@@ -350,6 +339,11 @@ else:
             const gridX = {grid_x_json};
             const zData = {z_json};
 
+            function getI(sym) {{
+                let val = parseFloat(sym);
+                return isNaN(val) ? (symbols[sym] !== undefined ? symbols[sym] : 1.0) : val;
+            }}
+
             let traces = [];
 
             // 1) Contour (자기장 등고선)
@@ -360,35 +354,39 @@ else:
                 colorbar: {{ title: '자기장 B', tickvals: [-3, 0, 3], ticktext: ['⊗ 들어감', '0 상쇄', '⊙ 나옴'] }}
             }});
 
-            // 2) 관찰 지점(P)과 반대편 지점(P_opp)을 지나는 3D 자기력선 루프 (타원 궤적)
+            // 2) 관찰 지점 통과 궤적 선
+            const kParallel = 0.50;
+            const kPerp = 1.00;
+
             for (let c of circles) {{
-                let fx = c.foot[0], fy = c.foot[1];
-                let px = targetPt[0], py = targetPt[1];
-                let r = c.radius;
-
-                let dx = px - fx, dy = py - fy;
-                let dist = Math.hypot(dx, dy);
-
-                if (dist > 1e-5) {{
-                    let nx = dx / dist, ny = dy / dist; // P를 향하는 반경 단위 벡터
-                    let ux = -ny, uy = nx;             // 도선 평행 방향 단위 벡터
-
-                    let gx = [], gy = [];
-                    for (let a = 0; a <= 2*Math.PI; a += 0.04) {{
-                        let xOff = r * Math.cos(a) * nx + r * 0.45 * Math.sin(a) * ux;
-                        let yOff = r * Math.cos(a) * ny + r * 0.45 * Math.sin(a) * uy;
-                        gx.push(fx + xOff);
-                        gy.push(fy + yOff);
-                    }}
-                    traces.push({{
-                        x: gx, y: gy, mode: 'lines',
-                        line: {{ color: 'rgba(120, 120, 140, 0.65)', width: 1.4, dash: 'dot' }},
-                        hoverinfo: 'none', showlegend: false
-                    }});
+                let ux = 1, uy = 0, nx = 0, ny = 1;
+                if (c.type === 'straight') {{
+                    let dx = (c.p2[0] - c.p1[0]) * c.direction;
+                    let dy = (c.p2[1] - c.p1[1]) * c.direction;
+                    let len = Math.hypot(dx, dy);
+                    if (len > 1e-5) {{ ux = dx / len; uy = dy / len; nx = -uy; ny = ux; }}
+                }} else {{
+                    let dx = targetPt[0] - c.center[0];
+                    let dy = targetPt[1] - c.center[1];
+                    let len = Math.hypot(dx, dy);
+                    if (len > 1e-5) {{ nx = dx / len; ny = dy / len; ux = -ny; uy = nx; }}
                 }}
+
+                let gx = [], gy = [];
+                for (let a = 0; a <= 2*Math.PI; a += 0.04) {{
+                    let xOff = c.radius * kParallel * Math.cos(a) * ux + c.radius * kPerp * Math.sin(a) * nx;
+                    let yOff = c.radius * kParallel * Math.cos(a) * uy + c.radius * kPerp * Math.sin(a) * ny;
+                    gx.push(c.foot[0] + xOff);
+                    gy.push(c.foot[1] + yOff);
+                }}
+                traces.push({{
+                    x: gx, y: gy, mode: 'lines',
+                    line: {{ color: 'rgba(150, 150, 165, 0.6)', width: 1.2, dash: 'dot' }},
+                    hoverinfo: 'none', showlegend: false
+                }});
             }}
 
-            // 3) 도선 시각화
+            // 3) 도선 표시
             for (let w of wires) {{
                 if (w.type === 'straight') {{
                     let x1 = w.p1[0], y1 = w.p1[1], x2 = w.p2[0], y2 = w.p2[1];
@@ -426,7 +424,7 @@ else:
                 }});
             }}
 
-            // 5) 현재 해석 타겟 관찰 지점 (P)
+            // 5) 현재 해석 타겟 관찰 지점
             traces.push({{
                 x: [targetPt[0]], y: [targetPt[1]], mode: 'markers',
                 marker: {{ size: 14, color: 'green', symbol: 'cross' }}, showlegend: false
@@ -448,106 +446,133 @@ else:
             Plotly.newPlot('plotly_canvas', traces, layout);
 
             // -----------------------------------------------------------------
-            // Canvas 애니메이션 엔진: 관찰 지점(P) 및 정반대편 지점(P_opp) 2 곳만 시각화
+            // 이전 버전의 궤적 애니메이션 엔진 복원 + 새로운 오른쪽/왼쪽 명암 규칙 적용
             // -----------------------------------------------------------------
             const pCanvas = document.getElementById('particle_canvas');
             const ctx = pCanvas.getContext('2d');
             const gd = document.getElementById('plotly_canvas');
 
-            let animFrame = 0;
+            let frameStep = 0;
 
-            function animatePiercingNodes() {{
+            function animateParticles() {{
                 ctx.clearRect(0, 0, 720, 720);
 
                 if (!gd._fullLayout || !gd._fullLayout.xaxis) {{
-                    requestAnimationFrame(animatePiercingNodes);
+                    requestAnimationFrame(animateParticles);
                     return;
                 }}
 
                 let xaxis = gd._fullLayout.xaxis;
                 let yaxis = gd._fullLayout.yaxis;
 
-                let pulsePhase = (animFrame % 60) / 60.0;
+                let rotFrac = (frameStep % 200) / 200.0;
 
                 for (let c of circles) {{
-                    let fx = c.foot[0], fy = c.foot[1];
-                    let px1 = targetPt[0], py1 = targetPt[1]; // 지점 1: 관측 지점 P
-                    let px2 = 2 * fx - px1, py2 = 2 * fy - py1; // 지점 2: 정반대편 대칭 지점 P_opp
+                    let footX = c.foot[0], footY = c.foot[1];
+                    let rBase = c.radius;
+                    let bMag = c.bMag;
+                    let rotDir = c.direction;
 
-                    let bDirP = c.bDirP; // P에서의 자기장 방향 (+1: 나옴 ⊙, -1: 들어감 ⊗)
+                    let ux = 1, uy = 0, nx = 0, ny = 1;
+                    if (c.type === 'straight') {{
+                        let dx = (c.p2[0] - c.p1[0]) * c.direction;
+                        let dy = (c.p2[1] - c.p1[1]) * c.direction;
+                        let len = Math.hypot(dx, dy);
+                        if (len > 1e-5) {{ ux = dx / len; uy = dy / len; nx = -uy; ny = ux; }}
+                    }} else {{
+                        let dx = targetPt[0] - c.center[0];
+                        let dy = targetPt[1] - c.center[1];
+                        let len = Math.hypot(dx, dy);
+                        if (len > 1e-5) {{ nx = dx / len; ny = dy / len; ux = -ny; uy = nx; }}
+                    }}
 
-                    // 지점 1(P)과 지점 2(P_opp)의 자기장 방향 설정
-                    let nodes = [
-                        {{ x: px1, y: py1, isOut: (bDirP > 0), mag: c.bMag, label: "P" }},
-                        {{ x: px2, y: py2, isOut: (bDirP < 0), mag: c.bMag, label: "P_opp" }}
-                    ];
+                    let speedMult = Math.min(Math.max(0.6 + 0.8 * bMag, 0.6), 3.0) * 0.7;
+                    let rOffsets = [0.0];
+                    let count = 18;
 
-                    for (let node of nodes) {{
-                        let sx = xaxis.l2p(node.x) + xaxis._offset;
-                        let sy = yaxis.l2p(node.y) + yaxis._offset;
+                    if (bMag >= 1.5) {{
+                        rOffsets = [-0.03, 0.0, 0.03];
+                        count = 28;
+                    }} else if (bMag >= 0.7) {{
+                        rOffsets = [-0.025, 0.025];
+                        count = 22;
+                    }}
 
-                        let grayVal, alpha, strokeStr, fillStr;
+                    let baseAngle = Math.atan2(targetPt[1] - footY, targetPt[0] - footX);
 
-                        if (node.isOut) {{
-                            // ⊙ 나옴: 진하고 명확함 (어두운 색상 & 높은 불투명도)
-                            grayVal = 15;
-                            alpha = Math.min(0.65 + node.mag * 0.15, 0.95);
-                            fillStr = `rgba(${{grayVal}}, ${{grayVal + 3}}, ${{grayVal + 5}}, ${{alpha.toFixed(2)}})`;
-                            strokeStr = `rgba(0, 0, 0, ${{Math.min(alpha + 0.1, 1.0).toFixed(2)}})`;
-                        }} else {{
-                            // ⊗ 들어감: 연하고 은은함 (밝은 은회색 & 낮은 불투명도)
-                            grayVal = 185;
-                            alpha = Math.min(0.20 + node.mag * 0.05, 0.35);
-                            fillStr = `rgba(${{grayVal}}, ${{grayVal + 2}}, ${{grayVal + 4}}, ${{alpha.toFixed(2)}})`;
-                            strokeStr = `rgba(130, 130, 130, ${{alpha.toFixed(2)}})`;
-                        }}
+                    for (let rOff of rOffsets) {{
+                        let rCurr = rBase + rOff;
+                        for (let i = 0; i < count; i++) {{
+                            let angle = baseAngle + (2 * Math.PI * i / count) + (rotDir * 2 * Math.PI * rotFrac * speedMult);
+                            
+                            let cosA = Math.cos(angle);
+                            let sinA = Math.sin(angle);
 
-                        ctx.save();
-                        ctx.translate(sx, sy);
+                            let px = footX + (rCurr * kParallel * cosA) * ux + (rCurr * kPerp * sinA) * nx;
+                            let py = footY + (rCurr * kParallel * cosA) * uy + (rCurr * kPerp * sinA) * ny;
 
-                        // 1) 지면을 뚫고 지나가는 입자 파동/동심원 (동적 애니메이션)
-                        let pulseR = 5.0 + pulsePhase * 12.0;
-                        let pulseAlpha = alpha * (1.0 - pulsePhase);
-                        ctx.beginPath();
-                        ctx.arc(0, 0, pulseR, 0, 2 * Math.PI);
-                        ctx.strokeStyle = node.isOut ? `rgba(15, 18, 20, ${{pulseAlpha.toFixed(2)}})` : `rgba(160, 160, 160, ${{pulseAlpha.toFixed(2)}})`;
-                        ctx.lineWidth = 1.2;
-                        ctx.stroke();
+                            let screenX = xaxis.l2p(px) + xaxis._offset;
+                            let screenY = yaxis.l2p(py) + yaxis._offset;
 
-                        // 2) 관과 뚫음 지점 입자 마커 (타원형 표상)
-                        ctx.beginPath();
-                        ctx.ellipse(0, 0, 7.5, 4.0, 0, 0, 2 * Math.PI);
-                        ctx.fillStyle = fillStr;
-                        ctx.fill();
-                        ctx.strokeStyle = strokeStr;
-                        ctx.lineWidth = 1.1;
-                        ctx.stroke();
+                            let vx = (-rCurr * kParallel * sinA * ux + rCurr * kPerp * cosA * nx) * rotDir;
+                            let vy = (-rCurr * kParallel * sinA * uy + rCurr * kPerp * cosA * ny) * rotDir;
 
-                        // 3) ⊙ / ⊗ 기호 각인
-                        ctx.beginPath();
-                        if (node.isOut) {{
-                            // ⊙ : 중심 점
-                            ctx.arc(0, 0, 1.6, 0, 2 * Math.PI);
-                            ctx.fillStyle = `rgba(255, 255, 255, ${{alpha.toFixed(2)}})`;
+                            let screenVx = vx * (xaxis._length / (xaxis.range[1] - xaxis.range[0]));
+                            let screenVy = -vy * (yaxis._length / (yaxis.range[1] - yaxis.range[0]));
+                            let tangentAngle = Math.atan2(screenVy, screenVx);
+
+                            // 🎯 [전류 방향 기준 위치 판단]
+                            // crossZ = (도선 진행 방향 ux, uy) × (입자 위치 벡터 px-x1, py-y1)
+                            let isLeft = false;
+                            if (c.type === 'straight') {{
+                                let x1 = c.p1[0], y1 = c.p1[1];
+                                let x2 = c.p2[0], y2 = c.p2[1];
+                                let dx = (x2 - x1) * c.direction;
+                                let dy = (y2 - y1) * c.direction;
+                                let crossZ = dx * (py - y1) - dy * (px - x1);
+                                isLeft = (crossZ >= 0); // 앙페르 왼손/오른나사 법칙: 왼쪽은 ⊙(나옴)
+                            }} else {{
+                                isLeft = (c.direction === 1);
+                            }}
+
+                            // 🎨 [명암 적용]
+                            // 왼쪽(나옴 ⊙): 어둡고 진함 (낮은 grayVal, 높은 alpha)
+                            // 오른쪽(들어감 ⊗): 밝고 연함 (높은 grayVal, 낮은 alpha)
+                            let grayVal, alpha, strokeStr;
+                            if (isLeft) {{
+                                grayVal = 15;
+                                alpha = 0.85;
+                                strokeStr = "rgba(0, 0, 0, 0.95)";
+                            }} else {{
+                                grayVal = 190;
+                                alpha = 0.28;
+                                strokeStr = "rgba(140, 140, 140, 0.35)";
+                            }}
+
+                            let colorStr = `rgba(${{grayVal}}, ${{grayVal + 3}}, ${{grayVal + 5}}, ${{alpha.toFixed(2)}})`;
+
+                            ctx.save();
+                            ctx.translate(screenX, screenY);
+                            ctx.rotate(tangentAngle);
+
+                            ctx.beginPath();
+                            ctx.ellipse(0, 0, 9.0, 2.0, 0, 0, 2 * Math.PI);
+                            ctx.fillStyle = colorStr;
                             ctx.fill();
-                        }} else {{
-                            // ⊗ : X 표시
-                            ctx.moveTo(-2.5, -2.5); ctx.lineTo(2.5, 2.5);
-                            ctx.moveTo(2.5, -2.5); ctx.lineTo(-2.5, 2.5);
-                            ctx.strokeStyle = `rgba(255, 255, 255, ${{(alpha * 1.5).toFixed(2)}})`;
-                            ctx.lineWidth = 1.0;
+                            ctx.strokeStyle = strokeStr;
+                            ctx.lineWidth = 0.8;
                             ctx.stroke();
-                        }}
 
-                        ctx.restore();
+                            ctx.restore();
+                        }}
                     }}
                 }}
 
-                animFrame++;
-                requestAnimationFrame(animatePiercingNodes);
+                frameStep++;
+                requestAnimationFrame(animateParticles);
             }}
 
-            requestAnimationFrame(animatePiercingNodes);
+            requestAnimationFrame(animateParticles);
         </script>
     </body>
     </html>
