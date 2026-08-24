@@ -748,8 +748,8 @@ else:
                             let isBright = (bSign === 1) ? isObsToOpp : !isObsToOpp;
                             let posFactor = isBright ? 1.0 : 0.0;
 
-                            let baseAlpha = Math.min((Math.abs(bNet) / 1.5) * 0.85, 0.80);
-                            let alpha = baseAlpha * (0.15 + 0.85 * posFactor);
+                            let baseAlpha = Math.min((Math.abs(bNet) / 1.5) * 0.95, 0.90);
+                            let alpha = baseAlpha * (0.25 + 0.75 * posFactor);
 
                             if (alpha < 0.03) continue;
 
@@ -774,7 +774,7 @@ else:
                             ctx.fillStyle = colorStr;
                             ctx.fill();
                             ctx.strokeStyle = `rgba(0, 0, 0, ${{Math.min(alpha + 0.1, 0.85).toFixed(2)}})`;
-                            ctx.lineWidth = 0.8;
+                            ctx.lineWidth = 0.1;
                             ctx.stroke();
                             ctx.restore();
                         }}
