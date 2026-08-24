@@ -748,8 +748,8 @@ else:
                             let isBright = (bSign === 1) ? isObsToOpp : !isObsToOpp;
                             let posFactor = isBright ? 1.0 : 0.0;
 
-                            let baseAlpha = Math.min((Math.abs(bNet) / 1.5) * 0.95, 0.90);
-                            let alpha = baseAlpha * (0.25 + 0.75 * posFactor);
+                            let baseAlpha = Math.min((Math.abs(bNet) / 1.5) * 0.95, 0.95);
+                            let alpha = baseAlpha * (0.35 + 0.65 * posFactor);
 
                             if (alpha < 0.03) continue;
 
