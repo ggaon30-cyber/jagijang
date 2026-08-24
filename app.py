@@ -187,13 +187,12 @@ if not st.session_state.is_running:
     else:
         st.caption("👆 [클릭 비활성화 모드] 화면 조작 시 요소가 추가되지 않습니다.")
 else:
-    st.info("📊 **[자기장 해석 모드]** 접선과 나란한 통통한 회색 타원 유체가 상시 자동 흐름을 생성합니다.")
+    st.info("📊 **[자기장 해석 모드]** 도선 수직 방향으로 압축된 타원 궤도 위를 높은 이심률의 타원 입자가 상시 순환합니다.")
 
 # -----------------------------------------------------------------------------
 # 4. 시각화 엔진 (편집 모드: Plotly / 해석 모드: Native JS 60FPS Engine)
 # -----------------------------------------------------------------------------
 if not st.session_state.is_running:
-    # 편집 모드용 Plotly 차트
     import plotly.graph_objects as go
     fig = go.Figure()
 
@@ -274,7 +273,7 @@ if not st.session_state.is_running:
     selected_data = st.plotly_chart(fig, use_container_width=True, on_select="rerun", selection_mode="points", key="interactive_grid")
 
 else:
-    # 📊 [자기장 해석 모드] - 클라이언트 측 Native JS 60FPS 애니메이션 엔진 주입
+    # 📊 [자기장 해석 모드] - 타원 궤적 및 고이심률 입자 자발적 렌더링
     grid_range = np.linspace(-20.0, 20.0, 150)
     X, Y = np.meshgrid(grid_range, grid_range)
     Z_total = np.zeros_like(X)
@@ -300,10 +299,13 @@ else:
                 "foot": [float(foot[0]), float(foot[1])],
                 "radius": float(r_val),
                 "bMag": float(b_mag),
-                "direction": int(wire.get('direction', 1))
+                "direction": int(wire.get('direction', 1)),
+                "type": str(wire['type']),
+                "p1": [float(wire['p1'][0]), float(wire['p1'][1])] if wire['type'] == 'straight' else [0, 0],
+                "p2": [float(wire['p2'][0]), float(wire['p2'][1])] if wire['type'] == 'straight' else [0, 0],
+                "center": [float(wire['center'][0]), float(wire['center'][1])] if wire['type'] == 'circle' else [0, 0]
             })
 
-    # JS 데이터 직렬화
     wires_json = json.dumps(st.session_state.wires)
     points_json = json.dumps(st.session_state.points)
     symbols_json = json.dumps(st.session_state.symbol_values)
@@ -364,7 +366,6 @@ else:
                 return totalB;
             }}
 
-            // Traces 구성
             let traces = [];
 
             // 1) Contour
@@ -375,17 +376,33 @@ else:
                 colorbar: {{ title: '자기장 B', tickvals: [-3, 0, 3], ticktext: ['⊗ 들어감', '0 상쇄', '⊙ 나옴'] }}
             }});
 
-            // 2) Guide circles
+            // 2) 전선 수직 방향으로 압축된 타원 가이드 궤적 (kSquash = 0.72)
+            const kSquash = 0.72;
+
             for (let c of circles) {{
-                let theta = [];
+                let ux = 1, uy = 0, nx = 0, ny = 1;
+                if (c.type === 'straight') {{
+                    let dx = (c.p2[0] - c.p1[0]) * c.direction;
+                    let dy = (c.p2[1] - c.p1[1]) * c.direction;
+                    let len = Math.hypot(dx, dy);
+                    if (len > 1e-5) {{ ux = dx / len; uy = dy / len; nx = -uy; ny = ux; }}
+                }} else {{
+                    let dx = targetPt[0] - c.center[0];
+                    let dy = targetPt[1] - c.center[1];
+                    let len = Math.hypot(dx, dy);
+                    if (len > 1e-5) {{ nx = dx / len; ny = dy / len; ux = -ny; uy = nx; }}
+                }}
+
                 let gx = [], gy = [];
-                for (let a = 0; a <= 2*Math.PI; a += 0.06) {{
-                    gx.push(c.foot[0] + c.radius * Math.cos(a));
-                    gy.push(c.foot[1] + c.radius * Math.sin(a));
+                for (let a = 0; a <= 2*Math.PI; a += 0.05) {{
+                    let xOff = c.radius * Math.cos(a) * ux + c.radius * kSquash * Math.sin(a) * nx;
+                    let yOff = c.radius * Math.cos(a) * uy + c.radius * kSquash * Math.sin(a) * ny;
+                    gx.push(c.foot[0] + xOff);
+                    gy.push(c.foot[1] + yOff);
                 }}
                 traces.push({{
                     x: gx, y: gy, mode: 'lines',
-                    line: {{ color: 'rgba(180, 180, 190, 0.5)', width: 1, dash: 'dot' }},
+                    line: {{ color: 'rgba(160, 160, 175, 0.55)', width: 1.1, dash: 'dot' }},
                     hoverinfo: 'none', showlegend: false
                 }});
             }}
@@ -434,14 +451,14 @@ else:
                 marker: {{ size: 14, color: 'green', symbol: 'cross' }}, showlegend: false
             }});
 
-            // 6) Particle Trace Index
+            // 6) Particle Trace Index (고이심률 e ~ 0.96 타원 입자)
             let particleTraceIdx = traces.length;
             traces.push({{
                 x: [], y: [], mode: 'markers',
                 marker: {{
-                    symbol: 'path://M -5,-2.8 A 5 2.8 0 1 0 5,2.8 A 5 2.8 0 1 0 -5,-2.8 Z',
+                    symbol: 'path://M -7,-2.0 A 7 2.0 0 1 0 7,2.0 A 7 2.0 0 1 0 -7,-2.0 Z',
                     size: [], angle: [], color: [],
-                    line: {{ width: 0.8, color: 'rgba(30, 30, 30, 0.6)' }}
+                    line: {{ width: 0.8, color: 'rgba(20, 20, 20, 0.7)' }}
                 }},
                 showlegend: false, hoverinfo: 'none'
             }});
@@ -461,11 +478,11 @@ else:
 
             Plotly.newPlot('plotly_canvas', traces, layout);
 
-            // 60FPS 무한 자발적 애니메이션 루프
+            // 60FPS 자발적 무한 자동 재생
             let frameStep = 0;
             function animateParticles() {{
                 let pxList = [], pyList = [], angleList = [], colorList = [], sizeList = [];
-                let rotFrac = (frameStep % 180) / 180.0;
+                let rotFrac = (frameStep % 200) / 200.0;
 
                 for (let c of circles) {{
                     let footX = c.foot[0], footY = c.foot[1];
@@ -473,16 +490,30 @@ else:
                     let bMag = c.bMag;
                     let rotDir = c.direction;
 
+                    // 도선 단위 벡터 계산 (ux, uy: 평행 / nx, ny: 수직)
+                    let ux = 1, uy = 0, nx = 0, ny = 1;
+                    if (c.type === 'straight') {{
+                        let dx = (c.p2[0] - c.p1[0]) * c.direction;
+                        let dy = (c.p2[1] - c.p1[1]) * c.direction;
+                        let len = Math.hypot(dx, dy);
+                        if (len > 1e-5) {{ ux = dx / len; uy = dy / len; nx = -uy; ny = ux; }}
+                    }} else {{
+                        let dx = targetPt[0] - c.center[0];
+                        let dy = targetPt[1] - c.center[1];
+                        let len = Math.hypot(dx, dy);
+                        if (len > 1e-5) {{ nx = dx / len; ny = dy / len; ux = -ny; uy = nx; }}
+                    }}
+
                     let speedMult = Math.min(Math.max(0.6 + 0.8 * bMag, 0.6), 3.0);
                     let rOffsets = [0.0];
                     let count = 18;
 
                     if (bMag >= 1.5) {{
                         rOffsets = [-0.03, 0.0, 0.03];
-                        count = 32;
+                        count = 30;
                     }} else if (bMag >= 0.7) {{
                         rOffsets = [-0.025, 0.025];
-                        count = 24;
+                        count = 22;
                     }}
 
                     let baseAngle = Math.atan2(targetPt[1] - footY, targetPt[0] - footX);
@@ -491,25 +522,29 @@ else:
                         let rCurr = rBase + rOff;
                         for (let i = 0; i < count; i++) {{
                             let angle = baseAngle + (2 * Math.PI * i / count) + (rotDir * 2 * Math.PI * rotFrac * speedMult);
-                            let px = footX + rCurr * Math.cos(angle);
-                            let py = footY + rCurr * Math.sin(angle);
+                            
+                            // 전선 수직 방향으로 압축된 타원 궤적 좌표 계산
+                            let cosA = Math.cos(angle);
+                            let sinA = Math.sin(angle);
+                            let px = footX + (rCurr * cosA) * ux + (rCurr * kSquash * sinA) * nx;
+                            let py = footY + (rCurr * cosA) * uy + (rCurr * kSquash * sinA) * ny;
 
                             let bNet = calcTotalB(px, py);
                             let alpha = Math.min(Math.abs(bNet) / 1.5, 0.88);
-                            if (alpha < 0.05) continue; // 상쇄 영역 소멸
+                            if (alpha < 0.05) continue; // 상쇄 지점 소멸
 
-                            // 접선 방향 각도 계산 (v_x, v_y)
-                            let vx = -Math.sin(angle) * rotDir;
-                            let vy = Math.cos(angle) * rotDir;
+                            // 변형 타원 궤적의 순간 접선 벡터 및 각도
+                            let vx = (-rCurr * sinA * ux + rCurr * kSquash * cosA * nx) * rotDir;
+                            let vy = (-rCurr * sinA * uy + rCurr * kSquash * cosA * ny) * rotDir;
                             let tangentDeg = Math.atan2(vy, vx) * (180.0 / Math.PI);
 
                             let grayVal = 100;
-                            if (bMag >= 1.2) grayVal = 40;       // 강함: 어두운 흑회색
-                            else if (bMag >= 0.6) grayVal = 90;  // 중간: 진한 회색
-                            else grayVal = 160;                  // 약함: 연한 회색
+                            if (bMag >= 1.2) grayVal = 35;       // 강함: 짙은 흑회색
+                            else if (bMag >= 0.6) grayVal = 85;  // 중간: 진한 회색
+                            else grayVal = 155;                  // 약함: 연한 회색
 
                             let colorStr = `rgba(${{grayVal}}, ${{grayVal + 5}}, ${{grayVal + 10}}, ${{alpha.toFixed(2)}})`;
-                            let sizeVal = Math.min(Math.max(8 + bMag * 2, 8), 15);
+                            let sizeVal = Math.min(Math.max(9 + bMag * 2, 9), 16);
 
                             pxList.push(px);
                             pyList.push(py);
