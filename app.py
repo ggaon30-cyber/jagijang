@@ -558,7 +558,7 @@ else:
                 colorbar: {{ title: '자기장 B', tickvals: [-3, 0, 3], ticktext: ['⊗ 들어감', '0 상쇄', '⊙ 나옴'] }}
             }});
 
-            // 2) 직선 도선용 궤적 고리 (실선 적용)
+            // 2) 직선 도선용 고리 (진한 영역은 굵고 진하게, 흐린 영역은 얇고 연하게 렌더링)
             const kParallel = 0.35;
             const kPerp = 1.00;
 
@@ -569,32 +569,53 @@ else:
                 let len = Math.hypot(dx, dy);
                 if (len > 1e-5) {{ ux = dx / len; uy = dy / len; nx = -uy; ny = ux; }}
 
-                // 기준 위치(0) 및 진행 방향 ±3d 오프셋
+                let rotDir = c.direction;
+                let bSign = c.bSign !== undefined ? c.bSign : 1;
+
+                // 기준 위치(0) 및 도선 진행 방향 기준 ±3d 오프셋 고리
                 const offsets = [0, -3, 3];
+                const dStep = 0.08; // 호(arc) 세그먼트 각도 분할 정밀도
 
                 for (let off of offsets) {{
                     let centerFootX = c.foot[0] + off * ux;
                     let centerFootY = c.foot[1] + off * uy;
-
-                    let gx = [], gy = [];
-                    for (let a = 0; a <= 2 * Math.PI; a += 0.04) {{
-                        let xOff = c.radius * kParallel * Math.cos(a) * ux + c.radius * kPerp * Math.sin(a) * nx;
-                        let yOff = c.radius * kParallel * Math.cos(a) * uy + c.radius * kPerp * Math.sin(a) * ny;
-                        gx.push(centerFootX + xOff);
-                        gy.push(centerFootY + yOff);
-                    }}
-
                     let isMain = (off === 0);
-                    traces.push({{
-                        x: gx, y: gy, mode: 'lines',
-                        line: {{
-                            // 실선(solid)으로 변경하고 투명도 및 두께 상향
-                            color: isMain ? 'rgba(20, 20, 30, 0.85)' : 'rgba(60, 60, 80, 0.65)',
-                            width: isMain ? 1.8 : 1.2,
-                            dash: 'solid'
-                        }},
-                        hoverinfo: 'none', showlegend: false
-                    }});
+
+                    for (let a = 0; a < 2 * Math.PI; a += dStep) {{
+                        let aNext = a + dStep + 0.01; // 연속성을 위해 살짝 중첩
+
+                        let aMid = (a + aNext) / 2;
+                        let thetaNorm = aMid % (2 * Math.PI);
+                        if (thetaNorm < 0) thetaNorm += 2 * Math.PI;
+
+                        // 입자 흐름의 명암 분할 조건과 동일한 기하학적 각도 산출
+                        let isObsToOpp = (rotDir === 1)
+                            ? (thetaNorm >= 0.5 * Math.PI && thetaNorm < 1.5 * Math.PI)
+                            : (thetaNorm < 0.5 * Math.PI || thetaNorm >= 1.5 * Math.PI);
+
+                        let isBright = (bSign === 1) ? isObsToOpp : !isObsToOpp;
+
+                        // 진한 영역과 흐린 영역의 선 두께(width) 및 투명도(opacity) 매핑
+                        let alpha = isBright ? (isMain ? 0.90 : 0.70) : (isMain ? 0.25 : 0.18);
+                        let wWidth = isBright ? (isMain ? 2.6 : 1.9) : (isMain ? 1.1 : 0.75);
+
+                        let segX = [], segY = [];
+                        for (let subA = a; subA <= aNext; subA += 0.02) {{
+                            let xOff = c.radius * kParallel * Math.cos(subA) * ux + c.radius * kPerp * Math.sin(subA) * nx;
+                            let yOff = c.radius * kParallel * Math.cos(subA) * uy + c.radius * kPerp * Math.sin(subA) * ny;
+                            segX.push(centerFootX + xOff);
+                            segY.push(centerFootY + yOff);
+                        }}
+
+                        traces.push({{
+                            x: segX, y: segY, mode: 'lines',
+                            line: {{
+                                color: `rgba(20, 20, 30, ${{alpha.toFixed(2)}})`,
+                                width: wWidth
+                            }},
+                            hoverinfo: 'none', showlegend: false
+                        }});
+                    }}
                 }}
             }}
 
@@ -657,7 +678,7 @@ else:
 
             Plotly.newPlot('plotly_canvas', traces, layout);
 
-            // Canvas 애니메이션 엔진
+            // Canvas 애니메이션 엔진 (기준 위치 0 고리 및 원형 도선 전용)
             const pCanvas = document.getElementById('particle_canvas');
             const ctx = pCanvas.getContext('2d');
             const gd = document.getElementById('plotly_canvas');
@@ -692,9 +713,9 @@ else:
                 let xaxis = gd._fullLayout.xaxis;
                 let yaxis = gd._fullLayout.yaxis;
 
-                // (1) 직선 도선 자기장: 기준 및 ±3d 고리 상에 흐르는 입자 렌더링
+                // (1) 기준 고리(0d)에만 흐르는 애니메이션 입자 렌더링
                 for (let c of straightCircles) {{
-                    let baseFootX = c.foot[0], baseFootY = c.foot[1];
+                    let footX = c.foot[0], footY = c.foot[1];
                     let rBase = c.radius;
                     let bMag = c.bMag;
                     let rotDir = c.direction;
@@ -709,66 +730,56 @@ else:
                     let speedMult = Math.min(Math.max(0.5 + 0.6 * bMag, 0.5), 2.5) * 0.7;
                     let rotFrac = (frameStep % 200) / 200.0;
 
-                    // 기준 고리 및 ±3d 위치에 고루 입자 형성
-                    const ringOffsets = [0, -3, 3];
+                    let rOffsets = [0.0];
+                    let count = 16;
+                    if (bMag >= 1.5) {{ rOffsets = [-0.02, 0.0, 0.02]; count = 22; }}
+                    else if (bMag >= 0.7) {{ rOffsets = [-0.015, 0.015]; count = 18; }}
 
-                    for (let ringOff of ringOffsets) {{
-                        let footX = baseFootX + ringOff * ux;
-                        let footY = baseFootY + ringOff * uy;
+                    for (let rOff of rOffsets) {{
+                        let rCurr = rBase + rOff;
+                        for (let i = 0; i < count; i++) {{
+                            let localTheta = (2 * Math.PI * i / count) + (rotDir * 2 * Math.PI * rotFrac * speedMult);
 
-                        let rOffsets = [0.0];
-                        let count = 16;
-                        if (bMag >= 1.5) {{ rOffsets = [-0.02, 0.0, 0.02]; count = 22; }}
-                        else if (bMag >= 0.7) {{ rOffsets = [-0.015, 0.015]; count = 18; }}
+                            let cosA = Math.cos(localTheta);
+                            let sinA = Math.sin(localTheta);
 
-                        for (let rOff of rOffsets) {{
-                            let rCurr = rBase + rOff;
-                            for (let i = 0; i < count; i++) {{
-                                let localTheta = (2 * Math.PI * i / count) + (rotDir * 2 * Math.PI * rotFrac * speedMult);
+                            let px = footX + (rCurr * kParallel * cosA) * ux + (rCurr * kPerp * sinA) * nx;
+                            let py = footY + (rCurr * kParallel * cosA) * uy + (rCurr * kPerp * sinA) * ny;
 
-                                let cosA = Math.cos(localTheta);
-                                let sinA = Math.sin(localTheta);
+                            let thetaNorm = localTheta % (2 * Math.PI);
+                            if (thetaNorm < 0) thetaNorm += 2 * Math.PI;
 
-                                let px = footX + (rCurr * kParallel * cosA) * ux + (rCurr * kPerp * sinA) * nx;
-                                let py = footY + (rCurr * kParallel * cosA) * uy + (rCurr * kPerp * sinA) * ny;
+                            let isObsToOpp = (rotDir === 1)
+                                ? (thetaNorm >= 0.5 * Math.PI && thetaNorm < 1.5 * Math.PI)
+                                : (thetaNorm < 0.5 * Math.PI || thetaNorm >= 1.5 * Math.PI);
 
-                                let thetaNorm = localTheta % (2 * Math.PI);
-                                if (thetaNorm < 0) thetaNorm += 2 * Math.PI;
+                            let isBright = (bSign === 1) ? isObsToOpp : !isObsToOpp;
+                            let alpha = isBright ? 0.90 : 0.25;
 
-                                let isObsToOpp = (rotDir === 1)
-                                    ? (thetaNorm >= 0.5 * Math.PI && thetaNorm < 1.5 * Math.PI)
-                                    : (thetaNorm < 0.5 * Math.PI || thetaNorm >= 1.5 * Math.PI);
+                            let screenX = xaxis.l2p(px) + xaxis._offset;
+                            let screenY = yaxis.l2p(py) + yaxis._offset;
 
-                                let isBright = (bSign === 1) ? isObsToOpp : !isObsToOpp;
+                            let vx = (-rCurr * kParallel * sinA * ux + rCurr * kPerp * cosA * nx) * rotDir;
+                            let vy = (-rCurr * kParallel * sinA * uy + rCurr * kPerp * cosA * ny) * rotDir;
 
-                                // 진함(0.90) / 흐림(0.25) 투명도 명암 차이 적용
-                                let alpha = isBright ? 0.90 : 0.25;
+                            let screenVx = vx * (xaxis._length / (xaxis.range[1] - xaxis.range[0]));
+                            let screenVy = -vy * (yaxis._length / (yaxis.range[1] - yaxis.range[0]));
+                            let tangentAngle = Math.atan2(screenVy, screenVx);
 
-                                let screenX = xaxis.l2p(px) + xaxis._offset;
-                                let screenY = yaxis.l2p(py) + yaxis._offset;
+                            let grayVal = bMag >= 1.2 ? 0 : (bMag >= 0.6 ? 25 : 60);
+                            let colorStr = `rgba(${{grayVal}}, ${{grayVal + 5}}, ${{grayVal + 10}}, ${{alpha.toFixed(2)}})`;
 
-                                let vx = (-rCurr * kParallel * sinA * ux + rCurr * kPerp * cosA * nx) * rotDir;
-                                let vy = (-rCurr * kParallel * sinA * uy + rCurr * kPerp * cosA * ny) * rotDir;
-
-                                let screenVx = vx * (xaxis._length / (xaxis.range[1] - xaxis.range[0]));
-                                let screenVy = -vy * (yaxis._length / (yaxis.range[1] - yaxis.range[0]));
-                                let tangentAngle = Math.atan2(screenVy, screenVx);
-
-                                let grayVal = bMag >= 1.2 ? 0 : (bMag >= 0.6 ? 25 : 60);
-                                let colorStr = `rgba(${{grayVal}}, ${{grayVal + 5}}, ${{grayVal + 10}}, ${{alpha.toFixed(2)}})`;
-
-                                ctx.save();
-                                ctx.translate(screenX, screenY);
-                                ctx.rotate(tangentAngle);
-                                ctx.beginPath();
-                                ctx.ellipse(0, 0, 7.5, 1.8, 0, 0, 2 * Math.PI);
-                                ctx.fillStyle = colorStr;
-                                ctx.fill();
-                                ctx.strokeStyle = `rgba(0, 0, 0, ${{Math.min(alpha + 0.05, 1.0).toFixed(2)}})`;
-                                ctx.lineWidth = 0.9;
-                                ctx.stroke();
-                                ctx.restore();
-                            }}
+                            ctx.save();
+                            ctx.translate(screenX, screenY);
+                            ctx.rotate(tangentAngle);
+                            ctx.beginPath();
+                            ctx.ellipse(0, 0, 7.5, 1.8, 0, 0, 2 * Math.PI);
+                            ctx.fillStyle = colorStr;
+                            ctx.fill();
+                            ctx.strokeStyle = `rgba(0, 0, 0, ${{Math.min(alpha + 0.05, 1.0).toFixed(2)}})`;
+                            ctx.lineWidth = 0.9;
+                            ctx.stroke();
+                            ctx.restore();
                         }}
                     }}
                 }}
