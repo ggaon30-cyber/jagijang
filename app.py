@@ -526,7 +526,7 @@ else:
                     if (len > 1e-5) {{ ux = dx / len; uy = dy / len; nx = -uy; ny = ux; }}
 
                     // 회전 속도 감쇄 (기존 0.7 배율 -> 0.5 배율)
-                    let speedMult = Math.min(Math.max(0.5 + 0.6 * bMag, 0.5), 2.5) * 0.5;
+                    let speedMult = Math.min(Math.max(0.5 + 0.6 * bMag, 0.5), 2.5) * 0.7;
                     let rOffsets = [0.0];
                     let count = 16;
 
