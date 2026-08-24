@@ -23,8 +23,8 @@ if "symbol_values" not in st.session_state:
 if "tool_mode" not in st.session_state:
     st.session_state.tool_mode = "straight"  # "straight", "circle", "select"
 
-if "first_click" not in st.session_state:
-    st.session_state.first_click = None
+if "p1_temp" not in st.session_state:
+    st.session_state.p1_temp = None  # 직선 도선 설치용 첫 번째 클릭 점 저장
 
 if "last_processed_pt" not in st.session_state:
     st.session_state.last_processed_pt = None
@@ -32,13 +32,13 @@ if "last_processed_pt" not in st.session_state:
 if "is_running" not in st.session_state:
     st.session_state.is_running = False
 
-# 예시 문제 불러오기
+# 첨부 교재 문제 복원 함수
 def load_preset_problem():
     st.session_state.wires = [
-        {"type": "straight", "name": "A", "p1": (-2.0, -5.0), "p2": (-2.0, 5.0), "current_symbol": "I_0", "direction": -1},
-        {"type": "straight", "name": "B", "p1": (2.0, -5.0), "p2": (2.0, 5.0), "current_symbol": "I_0", "direction": 1},
-        {"type": "straight", "name": "C", "p1": (-5.0, -2.0), "p2": (5.0, -2.0), "current_symbol": "I_0", "direction": 1},
-        {"type": "circle", "name": "D", "center": (0.0, -1.0), "radius": 1.0, "current_symbol": "I_0", "direction": 1}
+        {"type": "straight", "name": "A", "p1": (-2.0, -20.0), "p2": (-2.0, 20.0), "current_symbol": "I_0", "direction": -1},
+        {"type": "straight", "name": "B", "p1": (2.0, -20.0), "p2": (2.0, 20.0), "current_symbol": "I_0", "direction": 1},
+        {"type": "straight", "name": "C", "p1": (-20.0, -2.0), "p2": (20.0, -2.0), "current_symbol": "I_0", "direction": 1},
+        {"type": "circle", "name": "D", "center": (0.0, -1.0), "radius": 0.5, "current_symbol": "I_0", "direction": 1, "b_scale": 1.0}
     ]
     st.session_state.points = [
         {"name": "p", "x": -1.0, "y": 0.0},
@@ -46,10 +46,10 @@ def load_preset_problem():
         {"name": "q", "x": 1.0, "y": 0.0}
     ]
     st.session_state.symbol_values["I_0"] = 1.0
-    st.session_state.first_click = None
+    st.session_state.p1_temp = None
 
 # -----------------------------------------------------------------------------
-# 2. 물리 계산 엔진
+# 2. 물리 계산 엔진 (직선 및 원형 도선 공간 자기장)
 # -----------------------------------------------------------------------------
 def get_numeric_current(current_str, symbol_values):
     try:
@@ -70,12 +70,34 @@ def calc_straight_wire_B(x, y, p1, p2, I, direction):
     cross_z = (dx * (y - y1) - dy * (x - x1))
     r = np.abs(cross_z) / line_len
     
-    r_safe = np.where(r < 0.15, 1e-6, r)
+    r_safe = np.where(r < 0.1, 1e-6, r)
     b_dir = np.sign(cross_z)
     
     B_z = (I / r_safe) * b_dir
-    B_z[r < 0.15] = 0.0
+    B_z[r < 0.1] = 0.0
     return B_z
+
+def calc_circle_wire_B(x, y, center, radius, I, direction, k_scale=1.0, num_segments=32):
+    cx, cy = center
+    dtheta = 2 * np.pi / num_segments
+    angles = np.linspace(0, 2 * np.pi, num_segments, endpoint=False)
+    Bz = np.zeros_like(x)
+    
+    for a in angles:
+        wx = cx + radius * np.cos(a)
+        wy = cy + radius * np.sin(a)
+        dlx = -radius * np.sin(a) * dtheta * direction
+        dly =  radius * np.cos(a) * dtheta * direction
+        
+        rx = x - wx
+        ry = y - wy
+        dist_sq = rx**2 + ry**2 + 0.02
+        dist = np.sqrt(dist_sq)
+        
+        Bz += (dlx * ry - dly * rx) / (dist**3)
+        
+    norm_factor = (k_scale * I * radius) / (2 * np.pi)
+    return Bz * norm_factor
 
 # -----------------------------------------------------------------------------
 # 3. 메인 인터페이스 & 도선 그리기 툴바
@@ -100,51 +122,50 @@ st.markdown("---")
 
 # 도선 설치 도구 선택창
 if not st.session_state.is_running:
-    col_t1, col_t2, col_t3, col_t4 = st.columns([1, 1, 1, 1])
+    col_t1, col_t2, col_t3, col_t4 = st.columns([1.2, 1.2, 1, 1])
     with col_t1:
-        if st.button("📏 직선 도선 (두 점 클릭)", use_container_width=True, type="primary" if st.session_state.tool_mode == "straight" else "secondary"):
+        if st.button("📏 직선 도선 (2점 클릭)", use_container_width=True, type="primary" if st.session_state.tool_mode == "straight" else "secondary"):
             st.session_state.tool_mode = "straight"
-            st.session_state.first_click = None
+            st.session_state.p1_temp = None
             st.rerun()
     with col_t2:
-        if st.button("⭕ 원형 도선 (한 점 클릭)", use_container_width=True, type="primary" if st.session_state.tool_mode == "circle" else "secondary"):
+        if st.button("⭕ 원형 도선 (반지름 0.5d)", use_container_width=True, type="primary" if st.session_state.tool_mode == "circle" else "secondary"):
             st.session_state.tool_mode = "circle"
-            st.session_state.first_click = None
+            st.session_state.p1_temp = None
             st.rerun()
     with col_t3:
         if st.button("👆 클릭 비활성화", use_container_width=True, type="primary" if st.session_state.tool_mode == "select" else "secondary"):
             st.session_state.tool_mode = "select"
-            st.session_state.first_click = None
+            st.session_state.p1_temp = None
             st.rerun()
     with col_t4:
         if st.button("🧹 전체 도선 삭제", use_container_width=True):
             st.session_state.wires = []
-            st.session_state.first_click = None
+            st.session_state.p1_temp = None
             st.rerun()
 
-    # 안내 메시지
     if st.session_state.tool_mode == "straight":
-        if st.session_state.first_click is None:
-            st.info("📍 **[직선 도선 모드]** 좌표평면 위에서 **첫 번째 점**을 클릭하세요.")
+        if st.session_state.p1_temp is None:
+            st.info("📏 **[직선 도선 모드]** 첫 번째 점을 클릭하세요.")
         else:
-            fc = st.session_state.first_click
-            st.warning(f"📍 **첫 번째 점 선택 완료 ({fc[0]}d, {fc[1]}d)** → 직선을 완성할 **두 번째 점**을 클릭하세요.")
+            p1 = st.session_state.p1_temp
+            st.warning(f"📍 **첫 번째 점 선택됨 ({p1[0]}d, {p1[1]}d)** → 직선을 완성할 **두 번째 점**을 클릭하세요.")
             if st.button("첫 번째 점 선택 취소"):
-                st.session_state.first_click = None
+                st.session_state.p1_temp = None
                 st.rerun()
     elif st.session_state.tool_mode == "circle":
-        st.info("⭕ **[원형 도선 모드]** 좌표평면 위에서 **중심이 될 점**을 클릭하면 반지름 1d인 원형 도선이 설치됩니다.")
+        st.info("⭕ **[원형 도선 모드]** 중심이 될 점을 클릭하면 반지름 0.5d 원형 도선이 설치됩니다.")
     else:
-        st.caption("👆 [클릭 비활성화 모드] 클릭으로 도선이 추가되지 않습니다.")
+        st.caption("👆 [클릭 비활성화 모드] 화면 조작 시 도선이 추가되지 않습니다.")
 
 # -----------------------------------------------------------------------------
-# 4. 균일한 5d 좌표평면 그리드 시각화
+# 4. 좌표평면 시각화 (확대/축소 지원 & 선 두께 계층화)
 # -----------------------------------------------------------------------------
 fig = go.Figure()
 
-# 1) 해석 모드 시 자기장 등고선 표시
+# 1) 자기장 등고선 (해석 모드)
 if st.session_state.is_running and len(st.session_state.wires) > 0:
-    grid_range = np.linspace(-5.5, 5.5, 180)
+    grid_range = np.linspace(-6.0, 6.0, 160)
     X, Y = np.meshgrid(grid_range, grid_range)
     Z_total = np.zeros_like(X)
     
@@ -152,6 +173,9 @@ if st.session_state.is_running and len(st.session_state.wires) > 0:
         I_val = get_numeric_current(wire['current_symbol'], st.session_state.symbol_values)
         if wire['type'] == 'straight':
             Z_total += calc_straight_wire_B(X, Y, wire['p1'], wire['p2'], I_val, wire['direction'])
+        elif wire['type'] == 'circle':
+            k_val = wire.get('b_scale', 1.0)
+            Z_total += calc_circle_wire_B(X, Y, wire['center'], wire.get('radius', 0.5), I_val, wire['direction'], k_scale=k_val)
             
     Z_clipped = np.clip(Z_total, -8, 8)
     fig.add_trace(go.Contour(
@@ -161,17 +185,17 @@ if st.session_state.is_running and len(st.session_state.wires) > 0:
         colorbar=dict(title="자기장 B", tickvals=[-3, 0, 3], ticktext=["⊗ 들어감", "0 상쇄", "⊙ 나옴"])
     ))
 
-# 2) 클릭 가능한 배경 격자 포인트 (격자점 클릭 인식용)
-grid_x, grid_y = np.meshgrid(range(-5, 6), range(-5, 6))
+# 2) 광범위 격자점 (축소 대응: -20d ~ 20d)
+grid_x, grid_y = np.meshgrid(range(-20, 21), range(-20, 21))
 fig.add_trace(go.Scatter(
     x=grid_x.flatten(), y=grid_y.flatten(),
     mode='markers',
-    marker=dict(size=12, color='rgba(0,0,0,0.01)'),
+    marker=dict(size=10, color='rgba(0,0,0,0.01)'),
     hoverinfo='x+y',
     showlegend=False
 ))
 
-# 3) 도선 및 방향 화살표 그리기
+# 3) 도선 그리기 (두께: 3.8px)
 for wire in st.session_state.wires:
     sym = wire['current_symbol']
     name = wire['name']
@@ -187,13 +211,12 @@ for wire in st.session_state.wires:
             continue
         ux, uy = dx / length, dy / length
         
-        # 무한 직선으로 연장
-        px1, py1 = x1 - ux * 20, y1 - uy * 20
-        px2, py2 = x2 + ux * 20, y2 + uy * 20
+        px1, py1 = x1 - ux * 40, y1 - uy * 40
+        px2, py2 = x2 + ux * 40, y2 + uy * 40
         
         fig.add_trace(go.Scatter(
             x=[px1, px2], y=[py1, py2],
-            mode='lines', line=dict(color='#111111', width=3),
+            mode='lines', line=dict(color='#111111', width=3.8),
             showlegend=False, hoverinfo='none'
         ))
         
@@ -213,38 +236,38 @@ for wire in st.session_state.wires:
 
     elif wire['type'] == 'circle':
         cx, cy = wire['center']
-        r = wire['radius']
+        r = wire.get('radius', 0.5)
         theta = np.linspace(0, 2*np.pi, 100)
         
         fig.add_trace(go.Scatter(
             x=cx + r*np.cos(theta), y=cy + r*np.sin(theta),
-            mode='lines', line=dict(color='#111111', width=2.5, dash='dash' if wire['direction']==-1 else 'solid'),
+            mode='lines', line=dict(color='#111111', width=3.0, dash='dash' if wire['direction']==-1 else 'solid'),
             showlegend=False, hoverinfo='none'
         ))
         
         fig.add_annotation(
-            x=cx - r - 0.3, y=cy, text=f"<b>{name}</b>",
+            x=cx - r - 0.25, y=cy, text=f"<b>{name}</b>",
             showarrow=False, font=dict(size=15, color="black")
         )
         
         arrow_dir = 1 if wire['direction'] == 1 else -1
         fig.add_annotation(
-            x=cx - 0.3*arrow_dir, y=cy + r, ax=cx + 0.3*arrow_dir, ay=cy + r,
+            x=cx - 0.2*arrow_dir, y=cy + r, ax=cx + 0.2*arrow_dir, ay=cy + r,
             xref="x", yref="y", axref="x", ayref="y",
             showarrow=True, arrowhead=2, arrowsize=1.2, arrowwidth=2.5, arrowcolor="black",
             text=f"<b><i>{sym}</i></b>", font=dict(size=13, color="black")
         )
 
-# 4) 첫 번째 클릭 지점 하이라이트 표시
-if st.session_state.first_click is not None:
-    fc = st.session_state.first_click
+# 선택 진행 중인 점 표기 (빨간 X)
+if st.session_state.p1_temp is not None:
+    p1 = st.session_state.p1_temp
     fig.add_trace(go.Scatter(
-        x=[fc[0]], y=[fc[1]], mode='markers',
+        x=[p1[0]], y=[p1[1]], mode='markers',
         marker=dict(size=12, color='red', symbol='x'),
         showlegend=False
     ))
 
-# 5) 관찰 지점 (p, O, q)
+# 4) 관찰 지점 (p, O, q 등)
 for pt in st.session_state.points:
     fig.add_trace(go.Scatter(
         x=[pt['x']], y=[pt['y']], mode='markers+text',
@@ -253,23 +276,23 @@ for pt in st.session_state.points:
         textfont=dict(size=14, color="black"), showlegend=False
     ))
 
-# 균일한 5d 간격 좌표평면 그리드 설정
-tick_range = list(range(-5, 6))
-tick_labels = ["-5d", "-4d", "-3d", "-2d", "-d", "O", "d", "2d", "3d", "4d", "5d"]
+# 선 두께 계층 정의: 기본 격자 (0.8px, 연회색) < 축선 (1.8px, 진회색) < 도선 (3.8px, 검은색)
+tick_range = list(range(-20, 21))
+tick_labels = [f"{i}d" if i != 0 else "O" for i in range(-20, 21)]
 
 fig.update_layout(
     template="plotly_white",
     xaxis=dict(
         range=[-5.5, 5.5],
-        zeroline=True, zerolinecolor='black', zerolinewidth=2,
-        showgrid=True, gridcolor='#e0e0e0', gridwidth=1,
+        zeroline=True, zerolinecolor='#444444', zerolinewidth=1.8,
+        showgrid=True, gridcolor='#e5e5e5', gridwidth=0.8,
         tickvals=tick_range, ticktext=tick_labels,
         title="x"
     ),
     yaxis=dict(
         range=[-5.5, 5.5],
-        zeroline=True, zerolinecolor='black', zerolinewidth=2,
-        showgrid=True, gridcolor='#e0e0e0', gridwidth=1,
+        zeroline=True, zerolinecolor='#444444', zerolinewidth=1.8,
+        showgrid=True, gridcolor='#e5e5e5', gridwidth=0.8,
         tickvals=tick_range, ticktext=tick_labels,
         title="y", scaleanchor="x", scaleratio=1
     ),
@@ -277,7 +300,6 @@ fig.update_layout(
     margin=dict(l=30, r=30, t=30, b=30)
 )
 
-# Plotly 차트 출력 및 클릭 이벤트 감지
 selected_data = st.plotly_chart(
     fig,
     use_container_width=True,
@@ -287,7 +309,7 @@ selected_data = st.plotly_chart(
 )
 
 # -----------------------------------------------------------------------------
-# 5. 클릭 좌표 이벤트 처리 (도선 자동 생성)
+# 5. 좌표 클릭 이벤트 처리 (직선 2점 클릭 / 원형 1점 클릭)
 # -----------------------------------------------------------------------------
 if selected_data and "selection" in selected_data and "points" in selected_data["selection"]:
     pts = selected_data["selection"]["points"]
@@ -300,11 +322,11 @@ if selected_data and "selection" in selected_data and "points" in selected_data[
             st.session_state.last_processed_pt = curr_pt
 
             if st.session_state.tool_mode == "straight":
-                if st.session_state.first_click is None:
-                    st.session_state.first_click = curr_pt
+                if st.session_state.p1_temp is None:
+                    st.session_state.p1_temp = curr_pt
                     st.rerun()
                 else:
-                    p1 = st.session_state.first_click
+                    p1 = st.session_state.p1_temp
                     p2 = curr_pt
                     if p1 != p2:
                         w_name = chr(65 + len(st.session_state.wires))
@@ -313,29 +335,39 @@ if selected_data and "selection" in selected_data and "points" in selected_data[
                             "p1": p1, "p2": p2,
                             "current_symbol": "I_0", "direction": 1
                         })
-                    st.session_state.first_click = None
+                    st.session_state.p1_temp = None
                     st.rerun()
 
             elif st.session_state.tool_mode == "circle":
                 w_name = chr(65 + len(st.session_state.wires))
                 st.session_state.wires.append({
                     "type": "circle", "name": w_name,
-                    "center": curr_pt, "radius": 1.0,
-                    "current_symbol": "I_0", "direction": 1
+                    "center": curr_pt, "radius": 0.5,
+                    "current_symbol": "I_0", "direction": 1, "b_scale": 1.0
                 })
                 st.rerun()
 
 # -----------------------------------------------------------------------------
-# 6. 하단 사이드바 및 도선 데이터 속성 제어
+# 6. 사이드바 제어판 (도선, 관찰 지점, 전류 변수 제어)
 # -----------------------------------------------------------------------------
-st.sidebar.title("⚙️ 도선 상세 제어")
+st.sidebar.title("⚙️ 도선 및 관찰 지점 제어")
 
+# 1) 도선 상세 제어
 if st.session_state.wires:
     st.sidebar.subheader("📋 설치된 도선 목록")
     for idx, wire in enumerate(st.session_state.wires):
         with st.sidebar.expander(f"도선 {wire['name']} ({'직선' if wire['type']=='straight' else '원형'})", expanded=False):
             wire['current_symbol'] = st.text_input(f"전류 기호 #{idx+1}", value=wire['current_symbol'], key=f"sym_{idx}").strip()
             
+            if wire['type'] == 'circle':
+                wire['b_scale'] = st.number_input(
+                    f"중심 자기장 세기 계수 (k)",
+                    value=float(wire.get('b_scale', 1.0)),
+                    step=0.1,
+                    key=f"bscale_{idx}",
+                    help="원형 도선 중심에서의 자기장 B = k * (I / 0.5d) 의 k 값입니다."
+                )
+
             c1, c2 = st.columns(2)
             with c1:
                 if st.button("방향 반전 🔄", key=f"dir_{idx}"):
@@ -344,9 +376,10 @@ if st.session_state.wires:
             with c2:
                 if st.button("삭제 🗑️", key=f"del_{idx}"):
                     st.session_state.wires.pop(idx)
-                    st.session_state.first_click = None
+                    st.session_state.p1_temp = None
                     st.rerun()
 
+# 2) 미지수 전류 값 제어
 symbols = {w['current_symbol'] for w in st.session_state.wires if not w['current_symbol'].replace('.','',1).isdigit()}
 if symbols:
     st.sidebar.subheader("🎛️ 미지수 전류 값 슬라이더")
@@ -357,18 +390,34 @@ if symbols:
             f"미지수 [{sym}] 세기", -5.0, 5.0, float(st.session_state.symbol_values[sym]), 0.1, key=f"slider_{sym}"
         )
 
-# 수식 계산 결과 표시
+# 3) 관찰 지점 (p, O, q 등) 관리
+st.sidebar.markdown("---")
+st.sidebar.subheader("📍 관찰 지점 (p, O, q) 설정")
+for p_idx, pt in enumerate(st.session_state.points):
+    col_pt1, col_pt2, col_pt3 = st.sidebar.columns([1, 1, 1])
+    with col_pt1:
+        pt['name'] = st.text_input(f"이름", value=pt['name'], key=f"pt_name_{p_idx}")
+    with col_pt2:
+        pt['x'] = st.number_input(f"X", value=float(pt['x']), step=1.0, key=f"pt_x_{p_idx}")
+    with col_pt3:
+        pt['y'] = st.number_input(f"Y", value=float(pt['y']), step=1.0, key=f"pt_y_{p_idx}")
+
+# -----------------------------------------------------------------------------
+# 7. 수식 계산 및 합성 자기장 결과 출력
+# -----------------------------------------------------------------------------
 if st.session_state.is_running:
     st.markdown("---")
-    st.subheader("📐 지정 위치 자기장 수식 계산")
+    st.subheader("📐 지정 위치 자기장 수식 및 계산 결과")
+    
     col_p1, col_p2 = st.columns(2)
     with col_p1:
-        target_x = st.number_input("X 위치 (-5d ~ 5d)", value=0.0, step=1.0)
+        target_x = st.number_input("관찰 대상 X 위치", value=0.0, step=1.0)
     with col_p2:
-        target_y = st.number_input("Y 위치 (-5d ~ 5d)", value=0.0, step=1.0)
+        target_y = st.number_input("관찰 대상 Y 위치", value=0.0, step=1.0)
 
     terms = []
     num_total = 0.0
+    
     for wire in st.session_state.wires:
         sym = wire['current_symbol']
         I_val = get_numeric_current(sym, st.session_state.symbol_values)
@@ -389,12 +438,16 @@ if st.session_state.is_running:
                 
         elif wire['type'] == 'circle':
             cx, cy = wire['center']
+            k = wire.get('b_scale', 1.0)
             if abs(target_x - cx) < 1e-3 and abs(target_y - cy) < 1e-3:
                 sign = "+" if wire['direction'] == 1 else "-"
-                terms.append(f"{sign} \\frac{{{sym}}}{{d}} \\text{{ (원형 중심)}}")
-                num_total += (I_val / 1.0) * wire['direction']
+                k_str = f"{k:.1f} \\cdot " if k != 1.0 else ""
+                terms.append(f"{sign} {k_str}\\frac{{{sym}}}{{0.5d}} \\text{{ (원형 중심)}}")
+                num_total += (I_val / 0.5) * k * wire['direction']
 
     if terms:
         st.latex("B_{total} = " + " ".join(terms))
         dir_desc = "지면을 뚫고 나오는 방향 (⊙)" if num_total > 0 else "지면을 뚫고 들어가는 방향 (⊗)" if num_total < 0 else "자기장 상쇄 (0)"
-        st.info(f"**대입 결과:** $B = {abs(num_total):.2f} B_0$ | **방향:** {dir_desc}")
+        st.info(f"**슬라이더 대입 계산:** $B = {abs(num_total):.2f} B_0$ | **방향:** {dir_desc}")
+    else:
+        st.caption("선택한 지점에 유효하게 작용하는 도선 자기장 값이 없습니다.")
