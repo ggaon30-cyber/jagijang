@@ -739,9 +739,8 @@ else:
                             let py = footY + (rCurr * kParallel * cosA) * uy + (rCurr * kPerp * sinA) * ny;
 
                             let bNet = calcTotalB(px, py);
-
-                            // --- [수정] 관찰 지점 및 반대 지점 기준 이분법적 전환 ---
-                            let normAngle = (angle - baseAngle) % (2 * Math.PI);
+                            
+                            let normAngle = (angle - (baseAngle + Math.PI / 2)) % (2 * Math.PI);
                             if (normAngle < 0) normAngle += 2 * Math.PI;
 
                             let isObsToOpp = (rotDir === 1) ? (normAngle < Math.PI) : (normAngle >= Math.PI);
