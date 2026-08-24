@@ -369,7 +369,7 @@ else:
                         let lineLen = Math.hypot(dx, dy);
                         if (lineLen < 1e-6) continue;
                         let crossZ = dx * (py - y1) - dy * (px - x1);
-                        let r = Math.abs(cross_z) / lineLen;
+                        let r = Math.abs(crossZ) / lineLen;
                         if (r < 0.05) continue;
                         totalB += (I / r) * Math.sign(crossZ);
                     }} else if (w.type === 'circle') {{
@@ -478,23 +478,22 @@ else:
 
             Plotly.newPlot('plotly_canvas', traces, layout);
 
-            // Canvas 무작위 수직 수축/확산 입자 애니메이션 엔진
+            // Canvas 애니메이션 엔진
             const pCanvas = document.getElementById('particle_canvas');
             const ctx = pCanvas.getContext('2d');
             const gd = document.getElementById('plotly_canvas');
 
-            // 원형 도선 전용 무작위 입자 시스템 생성
+            // 원형 도선 내부 전용 얇은 무작위 입자 생성
             let circleParticles = [];
             for (let c of circles) {{
                 if (c.type === 'circle') {{
                     let pArray = [];
-                    let numP = 24;
+                    let numP = 28;
                     for (let k = 0; k < numP; k++) {{
                         pArray.push({{
                             angle: Math.random() * 2 * Math.PI,
                             progress: Math.random(),
-                            speed: 0.008 + Math.random() * 0.006,
-                            sizeOffset: 0.8 + Math.random() * 0.4
+                            speed: 0.006 + Math.random() * 0.005
                         }});
                     }}
                     circleParticles.push({{ circle: c, particles: pArray }});
@@ -514,9 +513,9 @@ else:
                 let xaxis = gd._fullLayout.xaxis;
                 let yaxis = gd._fullLayout.yaxis;
 
+                // 1) 직선 도선 자기장 (회전 입자 - 원본 유지)
                 for (let c of circles) {{
                     if (c.type === 'straight') {{
-                        // 직선 도선 회전 효과
                         let footX = c.foot[0], footY = c.foot[1];
                         let rBase = c.radius;
                         let bMag = c.bMag;
@@ -581,54 +580,50 @@ else:
                     }}
                 }}
 
-                // 원형 도선: 랜덤 임의 각도에서 수축(⊗ 들어감) 및 확산(⊙ 나옴)
+                // 2) 원형 도선 내부: 매우 얇은 들어감(⊗) / 나옴(⊙) 입자 흐름
                 for (let cp of circleParticles) {{
                     let c = cp.circle;
                     let cx = c.center[0], cy = c.center[1];
-                    let isOutwards = (c.direction === 1); // ⊙: 중심 -> 외부 확산 / ⊗: 외부 -> 중심 수축
+                    let rBound = c.radius || 0.5;
+                    let isOutwards = (c.direction === 1); // ⊙: 중심 -> 외부 / ⊗: 외부 -> 중심
 
                     for (let p of cp.particles) {{
                         p.progress += p.speed;
                         if (p.progress >= 1.0) {{
                             p.progress = 0.0;
-                            p.angle = Math.random() * 2 * Math.PI; // 리스폰 시 임의 각도 설정
-                            p.speed = 0.008 + Math.random() * 0.006;
+                            p.angle = Math.random() * 2 * Math.PI; // 리스폰 시 무작위 방향
+                            p.speed = 0.006 + Math.random() * 0.005;
                         }}
 
-                        let currentR = isOutwards ? p.progress * 0.45 : (1.0 - p.progress) * 0.45;
+                        let currentR = isOutwards ? p.progress * (rBound * 0.88) : (1.0 - p.progress) * (rBound * 0.88);
                         let px = cx + currentR * Math.cos(p.angle);
                         let py = cy + currentR * Math.sin(p.angle);
 
                         let screenX = xaxis.l2p(px) + xaxis._offset;
                         let screenY = yaxis.l2p(py) + yaxis._offset;
 
-                        let size = isOutwards ? (1.0 + p.progress * 4.0) * p.sizeOffset : (5.0 - p.progress * 4.0) * p.sizeOffset;
-                        let alpha = Math.sin(p.progress * Math.PI) * 0.85;
+                        // 한결 얇아진 크기 및 알파값
+                        let size = isOutwards ? (0.6 + p.progress * 1.8) : (2.4 - p.progress * 1.8);
+                        let alpha = Math.sin(p.progress * Math.PI) * 0.8;
 
                         ctx.save();
-                        ctx.beginPath();
-                        ctx.arc(screenX, screenY, Math.max(size, 0.6), 0, 2 * Math.PI);
-                        ctx.fillStyle = `rgba(60, 60, 70, ${{alpha.toFixed(2)}})`;
-                        ctx.fill();
-
-                        // ⊙ (나옴): 중앙 점 표시 / ⊗ (들어감): X자 수축 표시
-                        if (size > 2.0) {{
-                            if (isOutwards) {{
-                                ctx.beginPath();
-                                ctx.arc(screenX, screenY, 0.9, 0, 2 * Math.PI);
-                                ctx.fillStyle = `rgba(0, 0, 0, ${{alpha.toFixed(2)}})`;
-                                ctx.fill();
-                            }} else {{
-                                let s = size * 0.45;
-                                ctx.beginPath();
-                                ctx.moveTo(screenX - s, screenY - s);
-                                ctx.lineTo(screenX + s, screenY + s);
-                                ctx.moveTo(screenX + s, screenY - s);
-                                ctx.lineTo(screenX - s, screenY + s);
-                                ctx.strokeStyle = `rgba(15, 15, 15, ${{alpha.toFixed(2)}})`;
-                                ctx.lineWidth = 1.0;
-                                ctx.stroke();
-                            }}
+                        if (isOutwards) {{
+                            // ⊙ (나옴): 얇은 단일 점
+                            ctx.beginPath();
+                            ctx.arc(screenX, screenY, Math.max(size * 0.6, 0.5), 0, 2 * Math.PI);
+                            ctx.fillStyle = `rgba(20, 20, 20, ${{alpha.toFixed(2)}})`;
+                            ctx.fill();
+                        }} else {{
+                            // ⊗ (들어감): 얇고 선명한 십자 형태
+                            let s = Math.max(size * 0.7, 0.8);
+                            ctx.beginPath();
+                            ctx.moveTo(screenX - s, screenY - s);
+                            ctx.lineTo(screenX + s, screenY + s);
+                            ctx.moveTo(screenX + s, screenY - s);
+                            ctx.lineTo(screenX - s, screenY + s);
+                            ctx.strokeStyle = `rgba(30, 30, 30, ${{alpha.toFixed(2)}})`;
+                            ctx.lineWidth = 0.7;
+                            ctx.stroke();
                         }}
                         ctx.restore();
                     }}
