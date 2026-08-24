@@ -176,9 +176,9 @@ else:
 # -----------------------------------------------------------------------------
 fig = go.Figure()
 
-# 1) 자기장 등고선 (해석 모드)
+# 1) 자기장 등고선 (전체 영역 -20d ~ 20d 계산)
 if st.session_state.is_running and len(st.session_state.wires) > 0:
-    grid_range = np.linspace(-6.0, 6.0, 160)
+    grid_range = np.linspace(-20.0, 20.0, 200)
     X, Y = np.meshgrid(grid_range, grid_range)
     Z_total = np.zeros_like(X)
     
@@ -301,63 +301,79 @@ selected_data = st.plotly_chart(
 )
 
 # -----------------------------------------------------------------------------
-# 5. 좌표 클릭 이벤트 처리 (관찰지점 / 도선 / 해석 타겟 설정)
+# 5. 좌표 클릭 이벤트 처리 (오차 범위 허용 & 즉시 반영)
 # -----------------------------------------------------------------------------
 if selected_data and "selection" in selected_data and "points" in selected_data["selection"]:
     pts = selected_data["selection"]["points"]
     if len(pts) > 0:
-        clicked_x = float(round(pts[0]["x"]))
-        clicked_y = float(round(pts[0]["y"]))
-        curr_pt = (clicked_x, clicked_y)
+        raw_x = float(pts[0]["x"])
+        raw_y = float(pts[0]["y"])
 
-        if curr_pt != st.session_state.last_processed_pt:
-            st.session_state.last_processed_pt = curr_pt
+        # 오차범위 보정(Snap) 로직
+        matched_coord = None
+        
+        # 1) 설치된 관찰 지점 주변 0.4d 이내 클릭 시 해당 위치로 자동 흡착
+        for pt in st.session_state.points:
+            if np.hypot(raw_x - pt['x'], raw_y - pt['y']) <= 0.4:
+                matched_coord = (float(pt['x']), float(pt['y']))
+                break
 
-            # 해석 모드일 때 클릭한 위치를 계산 대상 위치로 변경
+        # 2) 관찰 지점이 없으면 가까운 정수 격자로 흡착 (0.45d 오차 허용)
+        if matched_coord is None:
+            near_x, near_y = float(round(raw_x)), float(round(raw_y))
+            if np.hypot(raw_x - near_x, raw_y - near_y) <= 0.45:
+                matched_coord = (near_x, near_y)
+
+        if matched_coord is not None:
+            # [해석 모드] 클릭 즉시 계산 위치 변경
             if st.session_state.is_running:
-                st.session_state.target_coord = curr_pt
-                st.rerun()
+                if st.session_state.target_coord != matched_coord:
+                    st.session_state.target_coord = matched_coord
+                    st.rerun()
 
-            # 편집 모드일 때 선택 도구별 설치
+            # [편집 모드] 도선 및 관찰 지점 생성
             else:
-                if st.session_state.tool_mode == "straight":
-                    if st.session_state.p1_temp is None:
-                        st.session_state.p1_temp = curr_pt
-                        st.rerun()
-                    else:
-                        p1, p2 = st.session_state.p1_temp, curr_pt
-                        if p1 != p2:
-                            w_name = chr(65 + len(st.session_state.wires))
-                            curr_symbol = f"I_{w_name}"
-                            st.session_state.wires.append({
-                                "type": "straight", "name": w_name, "p1": p1, "p2": p2,
-                                "current_symbol": curr_symbol, "direction": 1
-                            })
-                            if curr_symbol not in st.session_state.symbol_values:
-                                st.session_state.symbol_values[curr_symbol] = 1.0
-                        st.session_state.p1_temp = None
+                if matched_coord != st.session_state.last_processed_pt:
+                    st.session_state.last_processed_pt = matched_coord
+
+                    if st.session_state.tool_mode == "straight":
+                        if st.session_state.p1_temp is None:
+                            st.session_state.p1_temp = matched_coord
+                            st.rerun()
+                        else:
+                            p1, p2 = st.session_state.p1_temp, matched_coord
+                            if p1 != p2:
+                                w_name = chr(65 + len(st.session_state.wires))
+                                curr_symbol = f"I_{w_name}"
+                                st.session_state.wires.append({
+                                    "type": "straight", "name": w_name, "p1": p1, "p2": p2,
+                                    "current_symbol": curr_symbol, "direction": 1
+                                })
+                                if curr_symbol not in st.session_state.symbol_values:
+                                    st.session_state.symbol_values[curr_symbol] = 1.0
+                            st.session_state.p1_temp = None
+                            st.rerun()
+
+                    elif st.session_state.tool_mode == "circle":
+                        w_name = chr(65 + len(st.session_state.wires))
+                        curr_symbol = f"I_{w_name}"
+                        st.session_state.wires.append({
+                            "type": "circle", "name": w_name, "center": matched_coord, "radius": 0.5,
+                            "current_symbol": curr_symbol, "direction": 1, "b_scale": 1.0
+                        })
+                        if curr_symbol not in st.session_state.symbol_values:
+                            st.session_state.symbol_values[curr_symbol] = 1.0
                         st.rerun()
 
-                elif st.session_state.tool_mode == "circle":
-                    w_name = chr(65 + len(st.session_state.wires))
-                    curr_symbol = f"I_{w_name}"
-                    st.session_state.wires.append({
-                        "type": "circle", "name": w_name, "center": curr_pt, "radius": 0.5,
-                        "current_symbol": curr_symbol, "direction": 1, "b_scale": 1.0
-                    })
-                    if curr_symbol not in st.session_state.symbol_values:
-                        st.session_state.symbol_values[curr_symbol] = 1.0
-                    st.rerun()
-
-                elif st.session_state.tool_mode == "point":
-                    default_names = ["p", "O", "q", "r", "s", "t", "u", "v"]
-                    cnt = len(st.session_state.points)
-                    pt_name = default_names[cnt] if cnt < len(default_names) else f"P{cnt+1}"
-                    
-                    st.session_state.points.append({
-                        "name": pt_name, "x": clicked_x, "y": clicked_y
-                    })
-                    st.rerun()
+                    elif st.session_state.tool_mode == "point":
+                        default_names = ["p", "O", "q", "r", "s", "t", "u", "v"]
+                        cnt = len(st.session_state.points)
+                        pt_name = default_names[cnt] if cnt < len(default_names) else f"P{cnt+1}"
+                        
+                        st.session_state.points.append({
+                            "name": pt_name, "x": matched_coord[0], "y": matched_coord[1]
+                        })
+                        st.rerun()
 
 # -----------------------------------------------------------------------------
 # 6. 사이드바 제어판
@@ -378,28 +394,37 @@ if st.session_state.points:
                 st.session_state.points.pop(p_idx)
                 st.rerun()
 
-# 2) 도선 상세 제어
+# 2) 도선 목록 (방향 전환 버튼을 우측 레이아웃에 직접 노출)
 if st.session_state.wires:
     st.sidebar.subheader("📋 설치된 도선 목록")
     for idx, wire in enumerate(st.session_state.wires):
-        with st.sidebar.expander(f"도선 {wire['name']} ({'직선' if wire['type']=='straight' else '원형'})", expanded=False):
-            wire['current_symbol'] = st.text_input(f"전류 기호 #{idx+1}", value=wire['current_symbol'], key=f"sym_{idx}").strip()
+        col_w1, col_w2, col_w3, col_w4 = st.sidebar.columns([1.2, 1.4, 1.1, 0.8])
+        
+        with col_w1:
+            st.write(f"**도선 {wire['name']}**")
+            st.caption("직선" if wire['type']=='straight' else "원형")
             
-            if wire['type'] == 'circle':
-                wire['b_scale'] = st.number_input(
-                    f"중심 자기장 세기 계수 (k)", value=float(wire.get('b_scale', 1.0)), step=0.1, key=f"bscale_{idx}"
-                )
+        with col_w2:
+            wire['current_symbol'] = st.text_input(
+                "전류", value=wire['current_symbol'], key=f"sym_{idx}", label_visibility="collapsed"
+            ).strip()
+            
+        with col_w3:
+            dir_label = "⬆️" if wire['direction'] == 1 else "⬇️"
+            if st.button(f"{dir_label} 반전", key=f"dir_{idx}", use_container_width=True):
+                wire['direction'] *= -1
+                st.rerun()
+                
+        with col_w4:
+            if st.button("🗑️", key=f"del_{idx}", use_container_width=True):
+                st.session_state.wires.pop(idx)
+                st.session_state.p1_temp = None
+                st.rerun()
 
-            c1, c2 = st.columns(2)
-            with c1:
-                if st.button("방향 반전 🔄", key=f"dir_{idx}"):
-                    wire['direction'] *= -1
-                    st.rerun()
-            with c2:
-                if st.button("삭제 🗑️", key=f"del_{idx}"):
-                    st.session_state.wires.pop(idx)
-                    st.session_state.p1_temp = None
-                    st.rerun()
+        if wire['type'] == 'circle':
+            wire['b_scale'] = st.sidebar.number_input(
+                f"  └ 도선 {wire['name']} 중심 계수(k)", value=float(wire.get('b_scale', 1.0)), step=0.1, key=f"bscale_{idx}"
+            )
 
 # 3) 미지수 전류 슬라이더
 symbols = {w['current_symbol'] for w in st.session_state.wires if not w['current_symbol'].replace('.','',1).isdigit()}
@@ -425,15 +450,30 @@ if st.session_state.is_running:
     with col_sel:
         if st.session_state.points:
             pt_options = [f"{pt['name']} ({pt['x']}d, {pt['y']}d)" for pt in st.session_state.points]
-            selected_pt_str = st.selectbox("🎯 빠른 선택 (클릭 설치된 관찰 지점)", ["선택 안 함"] + pt_options)
+            
+            # 현재 target_coord와 일치하는 관찰 지점이 있으면 셀렉트박스 자동 동기화
+            matched_idx = 0
+            for p_i, pt in enumerate(st.session_state.points):
+                if (pt['x'], pt['y']) == (target_x, target_y):
+                    matched_idx = p_i + 1
+                    break
+
+            selected_pt_str = st.selectbox(
+                "🎯 빠른 선택 (클릭 설치된 관찰 지점)",
+                ["선택 안 함"] + pt_options,
+                index=matched_idx,
+                key="target_selectbox"
+            )
+            
             if selected_pt_str != "선택 안 함":
                 idx = pt_options.index(selected_pt_str)
-                target_x = st.session_state.points[idx]['x']
-                target_y = st.session_state.points[idx]['y']
-                st.session_state.target_coord = (target_x, target_y)
+                sel_x, sel_y = st.session_state.points[idx]['x'], st.session_state.points[idx]['y']
+                if (sel_x, sel_y) != st.session_state.target_coord:
+                    st.session_state.target_coord = (sel_x, sel_y)
+                    st.rerun()
 
     with col_info:
-        st.success(f"📍 현재 계산 위치: **X = {target_x}d, Y = {target_y}d** *(좌표평면을 직접 클릭하면 바뀝니다)*")
+        st.success(f"📍 현재 계산 위치: **X = {target_x}d, Y = {target_y}d** *(좌표평면을 직접 클릭하면 즉시 변경됩니다)*")
 
     terms = []
     num_total = 0.0
