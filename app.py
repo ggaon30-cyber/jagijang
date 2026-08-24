@@ -187,7 +187,7 @@ if not st.session_state.is_running:
     else:
         st.caption("👆 [클릭 비활성화 모드] 화면 조작 시 요소가 추가되지 않습니다.")
 else:
-    st.info("📊 **[자기장 해석 모드]** 전류 진행 방향의 **왼쪽 지점(⊙)**에서는 입자가 어둡고 진하게, **오른쪽 지점(⊗)**에서는 밝고 연하게 표시됩니다.")
+    st.info("📊 **[자기장 해석 모드]** 관찰 지점을 통과하는 수직 타원 궤도 위를 입자들이 기존 속도의 70% 수준으로 회전합니다.")
 
 # -----------------------------------------------------------------------------
 # 4. 시각화 엔진 (편집 모드: Plotly / 해석 모드: Native HTML5 Canvas + Plotly)
@@ -273,6 +273,7 @@ if not st.session_state.is_running:
     selected_data = st.plotly_chart(fig, use_container_width=True, on_select="rerun", selection_mode="points", key="interactive_grid")
 
 else:
+    # 📊 [자기장 해석 모드] - 관찰 지점 통과 보정 및 70% 감속 처리된 Canvas 애니메이션 엔진
     grid_range = np.linspace(-20.0, 20.0, 150)
     X, Y = np.meshgrid(grid_range, grid_range)
     Z_total = np.zeros_like(X)
@@ -344,9 +345,35 @@ else:
                 return isNaN(val) ? (symbols[sym] !== undefined ? symbols[sym] : 1.0) : val;
             }}
 
+            function calcTotalB(px, py) {{
+                let totalB = 0;
+                for (let w of wires) {{
+                    let I = getI(w.current_symbol);
+                    if (w.type === 'straight') {{
+                        let x1 = w.p1[0], y1 = w.p1[1];
+                        let x2 = w.p2[0], y2 = w.p2[1];
+                        let dx = (x2 - x1) * w.direction;
+                        let dy = (y2 - y1) * w.direction;
+                        let lineLen = Math.hypot(dx, dy);
+                        if (lineLen < 1e-6) continue;
+                        let crossZ = dx * (py - y1) - dy * (px - x1);
+                        let r = Math.abs(crossZ) / lineLen;
+                        if (r < 0.05) continue;
+                        totalB += (I / r) * Math.sign(crossZ);
+                    }} else if (w.type === 'circle') {{
+                        let cx = w.center[0], cy = w.center[1];
+                        let k = w.b_scale || 1.0;
+                        if (Math.hypot(px - cx, py - cy) < 0.1) {{
+                            totalB += (I / 0.5) * k * w.direction;
+                        }}
+                    }}
+                }}
+                return totalB;
+            }}
+
             let traces = [];
 
-            // 1) Contour (자기장 등고선)
+            // 1) Contour
             traces.push({{
                 x: gridX, y: gridX, z: zData,
                 type: 'contour', colorscale: 'RdBu_r', zmin: -4, zmax: 4, opacity: 0.35,
@@ -354,7 +381,7 @@ else:
                 colorbar: {{ title: '자기장 B', tickvals: [-3, 0, 3], ticktext: ['⊗ 들어감', '0 상쇄', '⊙ 나옴'] }}
             }});
 
-            // 2) 관찰 지점 통과 궤적 선
+            // 2) 관찰 지점을 통과하는 수직 방향 연장 타원 궤적 (kParallel = 0.50, kPerp = 1.00)
             const kParallel = 0.50;
             const kPerp = 1.00;
 
@@ -386,7 +413,7 @@ else:
                 }});
             }}
 
-            // 3) 도선 표시
+            // 3) Wires
             for (let w of wires) {{
                 if (w.type === 'straight') {{
                     let x1 = w.p1[0], y1 = w.p1[1], x2 = w.p2[0], y2 = w.p2[1];
@@ -414,7 +441,7 @@ else:
                 }}
             }}
 
-            // 4) 일반 관찰 지점
+            // 4) Points
             for (let pt of points) {{
                 traces.push({{
                     x: [pt.x], y: [pt.y], mode: 'markers+text',
@@ -424,7 +451,7 @@ else:
                 }});
             }}
 
-            // 5) 현재 해석 타겟 관찰 지점
+            // 5) Target Point
             traces.push({{
                 x: [targetPt[0]], y: [targetPt[1]], mode: 'markers',
                 marker: {{ size: 14, color: 'green', symbol: 'cross' }}, showlegend: false
@@ -445,9 +472,7 @@ else:
 
             Plotly.newPlot('plotly_canvas', traces, layout);
 
-            // -----------------------------------------------------------------
-            // 이전 버전의 궤적 애니메이션 엔진 복원 + 새로운 오른쪽/왼쪽 명암 규칙 적용
-            // -----------------------------------------------------------------
+            // Canvas 오버레이 기반 60FPS 애니메이션 엔진
             const pCanvas = document.getElementById('particle_canvas');
             const ctx = pCanvas.getContext('2d');
             const gd = document.getElementById('plotly_canvas');
@@ -486,6 +511,7 @@ else:
                         if (len > 1e-5) {{ nx = dx / len; ny = dy / len; ux = -ny; uy = nx; }}
                     }}
 
+                    // 기존 속도의 70% 수준으로 조정 (* 0.7)
                     let speedMult = Math.min(Math.max(0.6 + 0.8 * bMag, 0.6), 3.0) * 0.7;
                     let rOffsets = [0.0];
                     let count = 18;
@@ -508,12 +534,19 @@ else:
                             let cosA = Math.cos(angle);
                             let sinA = Math.sin(angle);
 
+                            // 관찰 지점을 정확히 통과하는 수직 연장 타원 궤도
                             let px = footX + (rCurr * kParallel * cosA) * ux + (rCurr * kPerp * sinA) * nx;
                             let py = footY + (rCurr * kParallel * cosA) * uy + (rCurr * kPerp * sinA) * ny;
 
+                            let bNet = calcTotalB(px, py);
+                            let alpha = Math.min(Math.abs(bNet) / 1.5, 0.90);
+                            if (alpha < 0.05) continue;
+
+                            // 화면 픽셀 좌표 변환
                             let screenX = xaxis.l2p(px) + xaxis._offset;
                             let screenY = yaxis.l2p(py) + yaxis._offset;
 
+                            // 순간 속도 벡터 (데이터 스페이스) -> 화면 스페이스 변환
                             let vx = (-rCurr * kParallel * sinA * ux + rCurr * kPerp * cosA * nx) * rotDir;
                             let vy = (-rCurr * kParallel * sinA * uy + rCurr * kPerp * cosA * ny) * rotDir;
 
@@ -521,36 +554,14 @@ else:
                             let screenVy = -vy * (yaxis._length / (yaxis.range[1] - yaxis.range[0]));
                             let tangentAngle = Math.atan2(screenVy, screenVx);
 
-                            // 🎯 [전류 방향 기준 위치 판단]
-                            // crossZ = (도선 진행 방향 ux, uy) × (입자 위치 벡터 px-x1, py-y1)
-                            let isLeft = false;
-                            if (c.type === 'straight') {{
-                                let x1 = c.p1[0], y1 = c.p1[1];
-                                let x2 = c.p2[0], y2 = c.p2[1];
-                                let dx = (x2 - x1) * c.direction;
-                                let dy = (y2 - y1) * c.direction;
-                                let crossZ = dx * (py - y1) - dy * (px - x1);
-                                isLeft = (crossZ >= 0); // 앙페르 왼손/오른나사 법칙: 왼쪽은 ⊙(나옴)
-                            }} else {{
-                                isLeft = (c.direction === 1);
-                            }}
+                            let grayVal = 100;
+                            if (bMag >= 1.2) grayVal = 25;
+                            else if (bMag >= 0.6) grayVal = 70;
+                            else grayVal = 140;
 
-                            // 🎨 [명암 적용]
-                            // 왼쪽(나옴 ⊙): 어둡고 진함 (낮은 grayVal, 높은 alpha)
-                            // 오른쪽(들어감 ⊗): 밝고 연함 (높은 grayVal, 낮은 alpha)
-                            let grayVal, alpha, strokeStr;
-                            if (isLeft) {{
-                                grayVal = 15;
-                                alpha = 0.85;
-                                strokeStr = "rgba(0, 0, 0, 0.95)";
-                            }} else {{
-                                grayVal = 190;
-                                alpha = 0.28;
-                                strokeStr = "rgba(140, 140, 140, 0.35)";
-                            }}
+                            let colorStr = `rgba(${{grayVal}}, ${{grayVal + 5}}, ${{grayVal + 10}}, ${{alpha.toFixed(2)}})`;
 
-                            let colorStr = `rgba(${{grayVal}}, ${{grayVal + 3}}, ${{grayVal + 5}}, ${{alpha.toFixed(2)}})`;
-
+                            // 고이심률 타원 입자 렌더링
                             ctx.save();
                             ctx.translate(screenX, screenY);
                             ctx.rotate(tangentAngle);
@@ -559,7 +570,7 @@ else:
                             ctx.ellipse(0, 0, 9.0, 2.0, 0, 0, 2 * Math.PI);
                             ctx.fillStyle = colorStr;
                             ctx.fill();
-                            ctx.strokeStyle = strokeStr;
+                            ctx.strokeStyle = `rgba(10, 10, 10, ${{Math.min(alpha + 0.1, 1.0)}})`;
                             ctx.lineWidth = 0.8;
                             ctx.stroke();
 
