@@ -38,17 +38,22 @@ if "target_coord" not in st.session_state:
 # 예시 문제 불러오기
 def load_preset_problem():
     st.session_state.wires = [
-        {"type": "straight", "name": "A", "p1": (-2.0, -20.0), "p2": (-2.0, 20.0), "current_symbol": "I_0", "direction": -1},
-        {"type": "straight", "name": "B", "p1": (2.0, -20.0), "p2": (2.0, 20.0), "current_symbol": "I_0", "direction": 1},
-        {"type": "straight", "name": "C", "p1": (-20.0, -2.0), "p2": (20.0, -2.0), "current_symbol": "I_0", "direction": 1},
-        {"type": "circle", "name": "D", "center": (0.0, -1.0), "radius": 0.5, "current_symbol": "I_0", "direction": 1, "b_scale": 1.0}
+        {"type": "straight", "name": "A", "p1": (-2.0, -20.0), "p2": (-2.0, 20.0), "current_symbol": "I_A", "direction": -1},
+        {"type": "straight", "name": "B", "p1": (2.0, -20.0), "p2": (2.0, 20.0), "current_symbol": "I_B", "direction": 1},
+        {"type": "straight", "name": "C", "p1": (-20.0, -2.0), "p2": (20.0, -2.0), "current_symbol": "I_C", "direction": 1},
+        {"type": "circle", "name": "D", "center": (0.0, -1.0), "radius": 0.5, "current_symbol": "I_D", "direction": 1, "b_scale": 1.0}
     ]
     st.session_state.points = [
         {"name": "p", "x": -1.0, "y": 0.0},
         {"name": "O", "x": 0.0, "y": 0.0},
         {"name": "q", "x": 1.0, "y": 0.0}
     ]
-    st.session_state.symbol_values["I_0"] = 1.0
+    st.session_state.symbol_values = {
+        "I_A": 1.0,
+        "I_B": 1.0,
+        "I_C": 1.0,
+        "I_D": 1.0
+    }
     st.session_state.p1_temp = None
 
 # -----------------------------------------------------------------------------
@@ -323,19 +328,25 @@ if selected_data and "selection" in selected_data and "points" in selected_data[
                         p1, p2 = st.session_state.p1_temp, curr_pt
                         if p1 != p2:
                             w_name = chr(65 + len(st.session_state.wires))
+                            curr_symbol = f"I_{w_name}"
                             st.session_state.wires.append({
                                 "type": "straight", "name": w_name, "p1": p1, "p2": p2,
-                                "current_symbol": "I_0", "direction": 1
+                                "current_symbol": curr_symbol, "direction": 1
                             })
+                            if curr_symbol not in st.session_state.symbol_values:
+                                st.session_state.symbol_values[curr_symbol] = 1.0
                         st.session_state.p1_temp = None
                         st.rerun()
 
                 elif st.session_state.tool_mode == "circle":
                     w_name = chr(65 + len(st.session_state.wires))
+                    curr_symbol = f"I_{w_name}"
                     st.session_state.wires.append({
                         "type": "circle", "name": w_name, "center": curr_pt, "radius": 0.5,
-                        "current_symbol": "I_0", "direction": 1, "b_scale": 1.0
+                        "current_symbol": curr_symbol, "direction": 1, "b_scale": 1.0
                     })
+                    if curr_symbol not in st.session_state.symbol_values:
+                        st.session_state.symbol_values[curr_symbol] = 1.0
                     st.rerun()
 
                 elif st.session_state.tool_mode == "point":
