@@ -307,8 +307,7 @@ fig.update_layout(
     margin=dict(l=20, r=20, t=30, b=20)
 )
 
-st.plotly_chart(fig, use_container_dict=False)
-
+st.plotly_chart(fig, use_container_width=False)
 # -----------------------------------------------------------------------------
 # 5. 수식 및 해석 정보 영역 (마우스 탐색 / 좌표 선택)
 # -----------------------------------------------------------------------------
