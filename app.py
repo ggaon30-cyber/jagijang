@@ -187,7 +187,7 @@ if not st.session_state.is_running:
     else:
         st.caption("👆 [클릭 비활성화 모드] 화면 조작 시 요소가 추가되지 않습니다.")
 else:
-    st.info("📊 **[자기장 해석 모드]** 전류 진행 방향의 **왼쪽 지점(⊙)**에서는 입자가 어둡고 진하게, **오른쪽 지점(⊗)**에서는 밝고 연하게 표시됩니다.")
+    st.info("📊 **[자기장 해석 모드]** 도선 기준 **오른쪽 지점**에서는 흐려지고, **왼쪽 지점**에서는 뚜렷해지도록 90도 보정된 명암 애니메이션이 적용됩니다.")
 
 # -----------------------------------------------------------------------------
 # 4. 시각화 엔진 (편집 모드: Plotly / 해석 모드: Native HTML5 Canvas + Plotly)
@@ -446,7 +446,7 @@ else:
             Plotly.newPlot('plotly_canvas', traces, layout);
 
             // -----------------------------------------------------------------
-            // 이전 버전의 궤적 애니메이션 엔진 복원 + 새로운 오른쪽/왼쪽 명암 규칙 적용
+            // 궤적 애니메이션 엔진 (오른쪽 흐림 / 왼쪽 뚜렷 - 90도 위상 보정 적용)
             // -----------------------------------------------------------------
             const pCanvas = document.getElementById('particle_canvas');
             const ctx = pCanvas.getContext('2d');
@@ -521,32 +521,30 @@ else:
                             let screenVy = -vy * (yaxis._length / (yaxis.range[1] - yaxis.range[0]));
                             let tangentAngle = Math.atan2(screenVy, screenVx);
 
-                            // 🎯 [전류 방향 기준 위치 판단]
-                            // crossZ = (도선 진행 방향 ux, uy) × (입자 위치 벡터 px-x1, py-y1)
-                            let isLeft = false;
-                            if (c.type === 'straight') {{
-                                let x1 = c.p1[0], y1 = c.p1[1];
-                                let x2 = c.p2[0], y2 = c.p2[1];
-                                let dx = (x2 - x1) * c.direction;
-                                let dy = (y2 - y1) * c.direction;
-                                let crossZ = dx * (py - y1) - dy * (px - x1);
-                                isLeft = (crossZ >= 0); // 앙페르 왼손/오른나사 법칙: 왼쪽은 ⊙(나옴)
-                            }} else {{
-                                isLeft = (c.direction === 1);
-                            }}
+                            // 🎯 [90도 위상 보정 및 명암 판정]
+                            // 도선 중심 혹은 기준점 대비 입자의 상대각 (baseAngle과의 차이)에 90도(π/2) 회전 보정 반영
+                            let diffAngle = angle - baseAngle;
+                            // -π ~ π 범위로 정규화
+                            while (diffAngle > Math.PI) diffAngle -= 2 * Math.PI;
+                            while (diffAngle < -Math.PI) diffAngle += 2 * Math.PI;
 
-                            // 🎨 [명암 적용]
-                            // 왼쪽(나옴 ⊙): 어둡고 진함 (낮은 grayVal, 높은 alpha)
-                            // 오른쪽(들어감 ⊗): 밝고 연함 (높은 grayVal, 낮은 alpha)
+                            // cos(diffAngle - π/2) = sin(diffAngle) 값을 이용하여 오른쪽/왼쪽 영역을 정확히 90도 매칭
+                            let phaseVal = Math.sin(diffAngle); 
+                            
+                            // phaseVal > 0 이면 도선 기준 오른쪽 지점(흐려짐), phaseVal < 0 이면 왼쪽 지점(뚜렷함)
+                            let isRightSide = (phaseVal > 0);
+
                             let grayVal, alpha, strokeStr;
-                            if (isLeft) {{
-                                grayVal = 15;
-                                alpha = 0.85;
-                                strokeStr = "rgba(0, 0, 0, 0.95)";
-                            }} else {{
+                            if (isRightSide) {{
+                                // 오른쪽 지점: 흐려짐 (연한 색상, 낮은 불투명도)
                                 grayVal = 190;
                                 alpha = 0.28;
                                 strokeStr = "rgba(140, 140, 140, 0.35)";
+                            }} else {{
+                                // 왼쪽 지점: 뚜렷함 (진한 색상, 높은 불투명도)
+                                grayVal = 15;
+                                alpha = 0.88;
+                                strokeStr = "rgba(0, 0, 0, 0.95)";
                             }}
 
                             let colorStr = `rgba(${{grayVal}}, ${{grayVal + 3}}, ${{grayVal + 5}}, ${{alpha.toFixed(2)}})`;
