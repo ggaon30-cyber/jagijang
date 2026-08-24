@@ -750,7 +750,7 @@ else:
                             let isBright = (bSign === 1) ? isObsToOpp : !isObsToOpp;
 
                             // 점진적 변화 없이 95%(0.95)와 70%(0.70)로 단칼에 전환
-                            let alpha = isBright ? 0.95 : 0.70;
+                            let alpha = isBright ? 0.90 : 0.40;
 
                             let screenX = xaxis.l2p(px) + xaxis._offset;
                             let screenY = yaxis.l2p(py) + yaxis._offset;
