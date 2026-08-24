@@ -596,7 +596,7 @@ else:
                         let isBright = (bSign === 1) ? isObsToOpp : !isObsToOpp;
 
                         // 진한 영역과 흐린 영역의 선 두께(width) 및 투명도(opacity) 매핑
-                        let alpha = isBright ? (isMain ? 0.90 : 0.70) : (isMain ? 0.25 : 0.18);
+                        let alpha = isBright ? (isMain ? 0.90 : 0.70) : (isMain ? 0.20 : 0.18);
                         let wWidth = isBright ? (isMain ? 2.6 : 1.9) : (isMain ? 1.1 : 0.75);
 
                         let segX = [], segY = [];
