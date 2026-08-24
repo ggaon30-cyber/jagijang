@@ -187,10 +187,10 @@ if not st.session_state.is_running:
     else:
         st.caption("👆 [클릭 비활성화 모드] 화면 조작 시 요소가 추가되지 않습니다.")
 else:
-    st.info("📊 **[자기장 해석 모드]** 도선 수직 방향으로 압축된 타원 궤도 위를 높은 이심률의 타원 입자가 상시 순환합니다.")
+    st.info("📊 **[자기장 해석 모드]** 도선 수직 방향으로 연장된 타원 궤도 위를 고이심률 타원 입자(e ≈ 0.975)가 실시간 회전합니다.")
 
 # -----------------------------------------------------------------------------
-# 4. 시각화 엔진 (편집 모드: Plotly / 해석 모드: Native JS 60FPS Engine)
+# 4. 시각화 엔진 (편집 모드: Plotly / 해석 모드: Native HTML5 Canvas + Plotly)
 # -----------------------------------------------------------------------------
 if not st.session_state.is_running:
     import plotly.graph_objects as go
@@ -273,7 +273,7 @@ if not st.session_state.is_running:
     selected_data = st.plotly_chart(fig, use_container_width=True, on_select="rerun", selection_mode="points", key="interactive_grid")
 
 else:
-    # 📊 [자기장 해석 모드] - 타원 궤적 및 고이심률 입자 자발적 렌더링
+    # 📊 [자기장 해석 모드] - 수직 연장 타원 궤도 및 Canvas 기반 고이심률 입자 렌더링
     grid_range = np.linspace(-20.0, 20.0, 150)
     X, Y = np.meshgrid(grid_range, grid_range)
     Z_total = np.zeros_like(X)
@@ -321,11 +321,16 @@ else:
         <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
         <style>
             body {{ margin: 0; padding: 0; overflow: hidden; }}
-            #plotly_canvas {{ width: 720px; height: 720px; }}
+            #container {{ position: relative; width: 720px; height: 720px; }}
+            #plotly_canvas {{ position: absolute; top: 0; left: 0; width: 720px; height: 720px; }}
+            #particle_canvas {{ position: absolute; top: 0; left: 0; width: 720px; height: 720px; pointer-events: none; z-index: 10; }}
         </style>
     </head>
     <body>
-        <div id="plotly_canvas"></div>
+        <div id="container">
+            <div id="plotly_canvas"></div>
+            <canvas id="particle_canvas" width="720" height="720"></canvas>
+        </div>
         <script>
             const wires = {wires_json};
             const points = {points_json};
@@ -376,8 +381,9 @@ else:
                 colorbar: {{ title: '자기장 B', tickvals: [-3, 0, 3], ticktext: ['⊗ 들어감', '0 상쇄', '⊙ 나옴'] }}
             }});
 
-            // 2) 전선 수직 방향으로 압축된 타원 가이드 궤적 (kSquash = 0.72)
-            const kSquash = 0.72;
+            // 2) 전선 수직 방향으로 연장된 타원 궤적 (kParallel = 0.65, kPerp = 1.30)
+            const kParallel = 0.65;
+            const kPerp = 1.30;
 
             for (let c of circles) {{
                 let ux = 1, uy = 0, nx = 0, ny = 1;
@@ -394,15 +400,15 @@ else:
                 }}
 
                 let gx = [], gy = [];
-                for (let a = 0; a <= 2*Math.PI; a += 0.05) {{
-                    let xOff = c.radius * Math.cos(a) * ux + c.radius * kSquash * Math.sin(a) * nx;
-                    let yOff = c.radius * Math.cos(a) * uy + c.radius * kSquash * Math.sin(a) * ny;
+                for (let a = 0; a <= 2*Math.PI; a += 0.04) {{
+                    let xOff = c.radius * kParallel * Math.cos(a) * ux + c.radius * kPerp * Math.sin(a) * nx;
+                    let yOff = c.radius * kParallel * Math.cos(a) * uy + c.radius * kPerp * Math.sin(a) * ny;
                     gx.push(c.foot[0] + xOff);
                     gy.push(c.foot[1] + yOff);
                 }}
                 traces.push({{
                     x: gx, y: gy, mode: 'lines',
-                    line: {{ color: 'rgba(160, 160, 175, 0.55)', width: 1.1, dash: 'dot' }},
+                    line: {{ color: 'rgba(150, 150, 165, 0.6)', width: 1.2, dash: 'dot' }},
                     hoverinfo: 'none', showlegend: false
                 }});
             }}
@@ -451,18 +457,6 @@ else:
                 marker: {{ size: 14, color: 'green', symbol: 'cross' }}, showlegend: false
             }});
 
-            // 6) Particle Trace Index (고이심률 e ~ 0.96 타원 입자)
-            let particleTraceIdx = traces.length;
-            traces.push({{
-                x: [], y: [], mode: 'markers',
-                marker: {{
-                    symbol: 'path://M -7,-2.0 A 7 2.0 0 1 0 7,2.0 A 7 2.0 0 1 0 -7,-2.0 Z',
-                    size: [], angle: [], color: [],
-                    line: {{ width: 0.8, color: 'rgba(20, 20, 20, 0.7)' }}
-                }},
-                showlegend: false, hoverinfo: 'none'
-            }});
-
             let tickRange = [], tickLabels = [];
             for (let i = -20; i <= 20; i++) {{
                 tickRange.push(i);
@@ -478,10 +472,24 @@ else:
 
             Plotly.newPlot('plotly_canvas', traces, layout);
 
-            // 60FPS 자발적 무한 자동 재생
+            // Canvas 오버레이 기반 60FPS 자발적 애니메이션 엔진
+            const pCanvas = document.getElementById('particle_canvas');
+            const ctx = pCanvas.getContext('2d');
+            const gd = document.getElementById('plotly_canvas');
+
             let frameStep = 0;
+
             function animateParticles() {{
-                let pxList = [], pyList = [], angleList = [], colorList = [], sizeList = [];
+                ctx.clearRect(0, 0, 720, 720);
+
+                if (!gd._fullLayout || !gd._fullLayout.xaxis) {{
+                    requestAnimationFrame(animateParticles);
+                    return;
+                }}
+
+                let xaxis = gd._fullLayout.xaxis;
+                let yaxis = gd._fullLayout.yaxis;
+
                 let rotFrac = (frameStep % 200) / 200.0;
 
                 for (let c of circles) {{
@@ -490,7 +498,6 @@ else:
                     let bMag = c.bMag;
                     let rotDir = c.direction;
 
-                    // 도선 단위 벡터 계산 (ux, uy: 평행 / nx, ny: 수직)
                     let ux = 1, uy = 0, nx = 0, ny = 1;
                     if (c.type === 'straight') {{
                         let dx = (c.p2[0] - c.p1[0]) * c.direction;
@@ -510,7 +517,7 @@ else:
 
                     if (bMag >= 1.5) {{
                         rOffsets = [-0.03, 0.0, 0.03];
-                        count = 30;
+                        count = 28;
                     }} else if (bMag >= 0.7) {{
                         rOffsets = [-0.025, 0.025];
                         count = 22;
@@ -523,45 +530,53 @@ else:
                         for (let i = 0; i < count; i++) {{
                             let angle = baseAngle + (2 * Math.PI * i / count) + (rotDir * 2 * Math.PI * rotFrac * speedMult);
                             
-                            // 전선 수직 방향으로 압축된 타원 궤적 좌표 계산
                             let cosA = Math.cos(angle);
                             let sinA = Math.sin(angle);
-                            let px = footX + (rCurr * cosA) * ux + (rCurr * kSquash * sinA) * nx;
-                            let py = footY + (rCurr * cosA) * uy + (rCurr * kSquash * sinA) * ny;
+
+                            // 전선 수직 방향 연장 타원 궤도
+                            let px = footX + (rCurr * kParallel * cosA) * ux + (rCurr * kPerp * sinA) * nx;
+                            let py = footY + (rCurr * kParallel * cosA) * uy + (rCurr * kPerp * sinA) * ny;
 
                             let bNet = calcTotalB(px, py);
-                            let alpha = Math.min(Math.abs(bNet) / 1.5, 0.88);
-                            if (alpha < 0.05) continue; // 상쇄 지점 소멸
+                            let alpha = Math.min(Math.abs(bNet) / 1.5, 0.90);
+                            if (alpha < 0.05) continue;
 
-                            // 변형 타원 궤적의 순간 접선 벡터 및 각도
-                            let vx = (-rCurr * sinA * ux + rCurr * kSquash * cosA * nx) * rotDir;
-                            let vy = (-rCurr * sinA * uy + rCurr * kSquash * cosA * ny) * rotDir;
-                            let tangentDeg = Math.atan2(vy, vx) * (180.0 / Math.PI);
+                            // 화면 픽셀 좌표 변환
+                            let screenX = xaxis.l2p(px) + xaxis._offset;
+                            let screenY = yaxis.l2p(py) + yaxis._offset;
+
+                            // 순간 속도 벡터 (데이터 스페이스) -> 화면 스페이스 변환
+                            let vx = (-rCurr * kParallel * sinA * ux + rCurr * kPerp * cosA * nx) * rotDir;
+                            let vy = (-rCurr * kParallel * sinA * uy + rCurr * kPerp * cosA * ny) * rotDir;
+
+                            let screenVx = vx * (xaxis._length / (xaxis.range[1] - xaxis.range[0]));
+                            let screenVy = -vy * (yaxis._length / (yaxis.range[1] - yaxis.range[0])); // Canvas Y 반전
+                            let tangentAngle = Math.atan2(screenVy, screenVx);
 
                             let grayVal = 100;
-                            if (bMag >= 1.2) grayVal = 35;       // 강함: 짙은 흑회색
-                            else if (bMag >= 0.6) grayVal = 85;  // 중간: 진한 회색
-                            else grayVal = 155;                  // 약함: 연한 회색
+                            if (bMag >= 1.2) grayVal = 25;
+                            else if (bMag >= 0.6) grayVal = 70;
+                            else grayVal = 140;
 
                             let colorStr = `rgba(${{grayVal}}, ${{grayVal + 5}}, ${{grayVal + 10}}, ${{alpha.toFixed(2)}})`;
-                            let sizeVal = Math.min(Math.max(9 + bMag * 2, 9), 16);
 
-                            pxList.push(px);
-                            pyList.push(py);
-                            angleList.push(tangentDeg);
-                            colorList.push(colorStr);
-                            sizeList.push(sizeVal);
+                            // 고이심률 타원 입자 렌더링 (장축 9.0px, 단축 2.0px -> e ≈ 0.975)
+                            ctx.save();
+                            ctx.translate(screenX, screenY);
+                            ctx.rotate(tangentAngle);
+
+                            ctx.beginPath();
+                            ctx.ellipse(0, 0, 9.0, 2.0, 0, 0, 2 * Math.PI);
+                            ctx.fillStyle = colorStr;
+                            ctx.fill();
+                            ctx.strokeStyle = `rgba(10, 10, 10, ${{Math.min(alpha + 0.1, 1.0)}})`;
+                            ctx.lineWidth = 0.8;
+                            ctx.stroke();
+
+                            ctx.restore();
                         }}
                     }}
                 }}
-
-                Plotly.restyle('plotly_canvas', {{
-                    x: [pxList],
-                    y: [pyList],
-                    'marker.size': [sizeList],
-                    'marker.angle': [angleList],
-                    'marker.color': [colorList]
-                }}, [particleTraceIdx]);
 
                 frameStep++;
                 requestAnimationFrame(animateParticles);
