@@ -391,8 +391,8 @@ else:
                 colorbar: {{ title: '자기장 B', tickvals: [-3, 0, 3], ticktext: ['⊗ 들어감', '0 상쇄', '⊙ 나옴'] }}
             }});
 
-            // 2) 직선 도선용 관찰 지점 통과 궤적 점선
-            const kParallel = 0.50;
+            // 2) 직선 도선용 관찰 지점 통과 궤적 점선 (kParallel 축소로 이심률 향상)
+            const kParallel = 0.35; // 기존 0.50 -> 0.35로 이심률 증가 (더 납작한 타원)
             const kPerp = 1.00;
 
             for (let c of straightCircles) {{
@@ -411,7 +411,7 @@ else:
                 }}
                 traces.push({{
                     x: gx, y: gy, mode: 'lines',
-                    line: {{ color: 'rgba(140, 140, 155, 0.7)', width: 1.2, dash: 'dot' }},
+                    line: {{ color: 'rgba(140, 140, 155, 0.55)', width: 1.1, dash: 'dot' }},
                     hoverinfo: 'none', showlegend: false
                 }});
             }}
@@ -480,17 +480,17 @@ else:
             const ctx = pCanvas.getContext('2d');
             const gd = document.getElementById('plotly_canvas');
 
-            // (2) 원형 도선 전용 독립 객체: 광선 생성기 (속도 상향, 길이 연장)
+            // 원형 도선 광선
             let circleRays = [];
             for (let c of circleWires) {{
                 let rayArray = [];
                 let numRays = 36;
                 for (let k = 0; k < numRays; k++) {{
-                    let lenFactor = 0.25 + Math.random() * 0.15; // 길이를 더 길게
+                    let lenFactor = 0.25 + Math.random() * 0.15;
                     rayArray.push({{
                         angle: Math.random() * 2 * Math.PI,
                         progress: Math.random() * (1.0 + lenFactor),
-                        speed: 0.035 + Math.random() * 0.025, // 이동 속도 약 2배 향상
+                        speed: 0.035 + Math.random() * 0.025,
                         lenFactor: lenFactor
                     }});
                 }}
@@ -511,7 +511,7 @@ else:
                 let yaxis = gd._fullLayout.yaxis;
 
                 // -------------------------------------------------------------
-                // 엔진 (1) 직선 도선 자기장: 점선 궤적 상의 회전 입자 (진하기 +10% 상향)
+                // 엔진 (1) 직선 도선 자기장: 세기 및 회전 속도 축소 조정
                 // -------------------------------------------------------------
                 for (let c of straightCircles) {{
                     let footX = c.foot[0], footY = c.foot[1];
@@ -525,12 +525,13 @@ else:
                     let ux = 1, uy = 0, nx = 0, ny = 1;
                     if (len > 1e-5) {{ ux = dx / len; uy = dy / len; nx = -uy; ny = ux; }}
 
-                    let speedMult = Math.min(Math.max(0.6 + 0.8 * bMag, 0.6), 3.0) * 0.7;
+                    // 회전 속도 감쇄 (기존 0.7 배율 -> 0.5 배율)
+                    let speedMult = Math.min(Math.max(0.5 + 0.6 * bMag, 0.5), 2.5) * 0.5;
                     let rOffsets = [0.0];
-                    let count = 18;
+                    let count = 16;
 
-                    if (bMag >= 1.5) {{ rOffsets = [-0.03, 0.0, 0.03]; count = 28; }}
-                    else if (bMag >= 0.7) {{ rOffsets = [-0.025, 0.025]; count = 22; }}
+                    if (bMag >= 1.5) {{ rOffsets = [-0.03, 0.0, 0.03]; count = 24; }}
+                    else if (bMag >= 0.7) {{ rOffsets = [-0.025, 0.025]; count = 20; }}
 
                     let baseAngle = Math.atan2(targetPt[1] - footY, targetPt[0] - footX);
                     let rotFrac = (frameStep % 200) / 200.0;
@@ -546,8 +547,8 @@ else:
                             let py = footY + (rCurr * kParallel * cosA) * uy + (rCurr * kPerp * sinA) * ny;
 
                             let bNet = calcTotalB(px, py);
-                            // 진하기 약 +10% 보정
-                            let alpha = Math.min((Math.abs(bNet) / 1.5) * 1.10, 0.98);
+                            // 진하기 약 -15% 축소 조정
+                            let alpha = Math.min((Math.abs(bNet) / 1.5) * 0.85, 0.80);
                             if (alpha < 0.05) continue;
 
                             let screenX = xaxis.l2p(px) + xaxis._offset;
@@ -560,19 +561,18 @@ else:
                             let screenVy = -vy * (yaxis._length / (yaxis.range[1] - yaxis.range[0]));
                             let tangentAngle = Math.atan2(screenVy, screenVx);
 
-                            // 회전 입자 명암 진하게 조정
-                            let grayVal = bMag >= 1.2 ? 10 : (bMag >= 0.6 ? 45 : 100);
+                            let grayVal = bMag >= 1.2 ? 30 : (bMag >= 0.6 ? 65 : 110);
                             let colorStr = `rgba(${{grayVal}}, ${{grayVal + 5}}, ${{grayVal + 10}}, ${{alpha.toFixed(2)}})`;
 
                             ctx.save();
                             ctx.translate(screenX, screenY);
                             ctx.rotate(tangentAngle);
                             ctx.beginPath();
-                            ctx.ellipse(0, 0, 9.0, 2.0, 0, 0, 2 * Math.PI);
+                            ctx.ellipse(0, 0, 8.0, 1.8, 0, 0, 2 * Math.PI);
                             ctx.fillStyle = colorStr;
                             ctx.fill();
-                            ctx.strokeStyle = `rgba(0, 0, 0, ${{Math.min(alpha + 0.15, 1.0)}})`;
-                            ctx.lineWidth = 0.9;
+                            ctx.strokeStyle = `rgba(0, 0, 0, ${{Math.min(alpha + 0.1, 0.85)}})`;
+                            ctx.lineWidth = 0.8;
                             ctx.stroke();
                             ctx.restore();
                         }}
@@ -580,7 +580,7 @@ else:
                 }}
 
                 // -------------------------------------------------------------
-                // 엔진 (2) 원형 도선 중심: 얇고 진하며 끝부분 도달 시 즉시 소멸하는 광선
+                // 엔진 (2) 원형 도선 중심 광선 연출
                 // -------------------------------------------------------------
                 for (let cr of circleRays) {{
                     let c = cr.circle;
@@ -591,7 +591,6 @@ else:
                     for (let r of cr.rays) {{
                         r.progress += r.speed;
 
-                        // 안쪽 끝부분이 고리(경계)에 도착하는 순간 즉시 리셋
                         if (r.progress >= 1.0 + r.lenFactor) {{
                             r.progress = 0.0;
                             r.angle = Math.random() * 2 * Math.PI;
@@ -600,10 +599,10 @@ else:
                         }}
 
                         let pHead, pTail;
-                        if (isOutwards) {{ // ⊙: 중심 -> 고리 방출
+                        if (isOutwards) {{
                             pHead = Math.min(1.0, r.progress);
                             pTail = Math.max(0.0, r.progress - r.lenFactor);
-                        }} else {{ // ⊗: 고리 -> 중심 수축
+                        }} else {{
                             pHead = Math.max(0.0, 1.0 - r.progress);
                             pTail = Math.min(1.0, 1.0 - (r.progress - r.lenFactor));
                         }}
@@ -626,9 +625,8 @@ else:
                             ctx.beginPath();
                             ctx.moveTo(screenTx, screenTy);
                             ctx.lineTo(screenHx, screenHy);
-                            // 서서히 disappearing 대신 진하고 선명하게 고리까지 유지
                             ctx.strokeStyle = "rgba(0, 0, 0, 0.95)";
-                            ctx.lineWidth = 0.55; // 더 얇은 광선
+                            ctx.lineWidth = 0.55;
                             ctx.lineCap = "round";
                             ctx.stroke();
                             ctx.restore();
