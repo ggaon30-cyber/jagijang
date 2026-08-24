@@ -23,13 +23,12 @@ if "symbol_values" not in st.session_state:
 if "is_running" not in st.session_state:
     st.session_state.is_running = False
 
-# 교재 문제 예시 불러오기 함수
 def load_preset_problem():
     st.session_state.wires = [
-        {"type": "straight", "name": "A", "p1": (-2.0, -4.0), "p2": (-2.0, 4.0), "current_symbol": "I_0", "direction": -1}, # 아래 방향
-        {"type": "straight", "name": "B", "p1": (2.0, -4.0), "p2": (2.0, 4.0), "current_symbol": "I_0", "direction": 1},   # 위 방향
-        {"type": "straight", "name": "C", "p1": (-4.0, -2.0), "p2": (4.0, -2.0), "current_symbol": "I_0", "direction": 1},  # 오른쪽 방향
-        {"type": "circle", "name": "D", "center": (0.0, -1.0), "radius": 1.0, "current_symbol": "I_0", "direction": 1}     # 반시계 방향
+        {"type": "straight", "name": "A", "p1": (-2.0, -4.0), "p2": (-2.0, 4.0), "current_symbol": "I_0", "direction": -1},
+        {"type": "straight", "name": "B", "p1": (2.0, -4.0), "p2": (2.0, 4.0), "current_symbol": "I_0", "direction": 1},
+        {"type": "straight", "name": "C", "p1": (-4.0, -2.0), "p2": (4.0, -2.0), "current_symbol": "I_0", "direction": 1},
+        {"type": "circle", "name": "D", "center": (0.0, -1.0), "radius": 1.0, "current_symbol": "I_0", "direction": 1}
     ]
     st.session_state.points = [
         {"name": "p", "x": -1.0, "y": 0.0},
@@ -117,7 +116,6 @@ if not st.session_state.is_running:
             })
         st.rerun()
 
-# 도선 목록 제어
 st.sidebar.subheader("📋 설치된 도선 목록")
 for idx, wire in enumerate(st.session_state.wires):
     with st.sidebar.expander(f"도선 {wire['name']} ({'직선' if wire['type']=='straight' else '원형'})", expanded=False):
@@ -135,7 +133,6 @@ for idx, wire in enumerate(st.session_state.wires):
                     st.session_state.wires.pop(idx)
                     st.rerun()
 
-# 미지수 전류 슬라이더
 symbols = {w['current_symbol'] for w in st.session_state.wires if not w['current_symbol'].replace('.','',1).isdigit()}
 if symbols:
     st.sidebar.subheader("🎛️ 미지수 전류 값 제어")
@@ -146,7 +143,7 @@ if symbols:
         st.session_state.symbol_values[sym] = val
 
 # -----------------------------------------------------------------------------
-# 4. Plotly 좌표평면 시각화 (교재 물리 문제 스타일)
+# 4. Plotly 좌표평면 시각화
 # -----------------------------------------------------------------------------
 st.title("🧲 2D 도선 자기장 플랫폼")
 
@@ -162,7 +159,6 @@ if st.session_state.is_running:
 
 fig = go.Figure()
 
-# 1) 실행 모드: 자기장 등고선/히트맵 overlay
 if st.session_state.is_running and len(st.session_state.wires) > 0:
     Z_clipped = np.clip(Z_total, -8, 8)
     fig.add_trace(go.Contour(
@@ -172,7 +168,6 @@ if st.session_state.is_running and len(st.session_state.wires) > 0:
         colorbar=dict(title="자기장 B", tickvals=[-3, 0, 3], ticktext=["⊗ 들어감", "0 상쇄", "⊙ 나옴"])
     ))
 
-# 2) 도선 및 라벨/화살표 그리기 (교재 스타일)
 for wire in st.session_state.wires:
     sym = wire['current_symbol']
     name = wire['name']
@@ -186,26 +181,21 @@ for wire in st.session_state.wires:
         length = np.hypot(dx, dy)
         ux, uy = dx / length, dy / length
         
-        # 무한 도선처럼 보이도록 연장
         px1, py1 = x1 - ux * 10, y1 - uy * 10
         px2, py2 = x2 + ux * 10, y2 + uy * 10
         
-        # 도선 본체 (이중선 느낌의 두꺼운 실선)
         fig.add_trace(go.Scatter(
             x=[px1, px2], y=[py1, py2],
             mode='lines', line=dict(color='#222222', width=3.5),
             showlegend=False, hoverinfo='none'
         ))
         
-        # 전류 방향 화살표 및 수식 표기
         mx, my = (x1 + x2) / 2, (y1 + y2) / 2
-        # 도선 명칭 (A, B, C 등)
         fig.add_annotation(
             x=x2 + uy * 0.2, y=y2 - ux * 0.2,
             text=f"<b>{name}</b>", showarrow=False,
             font=dict(size=16, color="black")
         )
-        # 전류 화살표 및 전류값 (I_0)
         fig.add_annotation(
             x=mx + ux * 0.6, y=my + uy * 0.6, ax=mx, ay=my,
             xref="x", yref="y", axref="x", ayref="y",
@@ -219,20 +209,17 @@ for wire in st.session_state.wires:
         r = wire['radius']
         theta = np.linspace(0, 2*np.pi, 100)
         
-        # 원형 도선
         fig.add_trace(go.Scatter(
             x=cx + r*np.cos(theta), y=cy + r*np.sin(theta),
             mode='lines', line=dict(color='#222222', width=2.5, dash='dash' if wire['direction']==-1 else 'solid'),
             showlegend=False, hoverinfo='none'
         ))
         
-        # 원형 도선 명칭 및 중앙 전류 화살표
         fig.add_annotation(
             x=cx - r - 0.25, y=cy, text=f"<b>{name}</b>",
             showarrow=False, font=dict(size=16, color="black")
         )
         
-        # 중심부 방향 화살표 (원 상단 기준 접선 방향)
         arrow_dir = 1 if wire['direction'] == 1 else -1
         fig.add_annotation(
             x=cx - 0.3*arrow_dir, y=cy + r, ax=cx + 0.3*arrow_dir, ay=cy + r,
@@ -241,16 +228,15 @@ for wire in st.session_state.wires:
             text=f"<b><i>{sym}</i></b>", font=dict(size=14, color="black")
         )
 
-# 3) 주요 관찰 지점 (p, O, q 등 점 표시)
+# 주요 관찰 지점 (수정된 부분: font -> textfont)
 for pt in st.session_state.points:
     fig.add_trace(go.Scatter(
         x=[pt['x']], y=[pt['y']], mode='markers+text',
         marker=dict(size=7, color='black'),
         text=[f"<b>{pt['name']}</b>"], textposition="top center",
-        font=dict(size=14, color="black"), showlegend=False
+        textfont=dict(size=14, color="black"), showlegend=False
     ))
 
-# 좌표축 및 레이아웃 설정 (교재 문제 스타일)
 fig.update_layout(
     template="plotly_white",
     xaxis=dict(
@@ -269,7 +255,7 @@ fig.update_layout(
 st.plotly_chart(fig, use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# 5. 지점별 자기장 식 및 계산값 출력
+# 5. 수식 계산 출력
 # -----------------------------------------------------------------------------
 st.markdown("---")
 st.subheader("📐 특정 지점의 자기장 수식 계산")
