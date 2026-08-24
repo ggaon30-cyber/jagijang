@@ -2,6 +2,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 import numpy as np
 import json
+import plotly.graph_objects as go
 
 # -----------------------------------------------------------------------------
 # 1. 페이지 및 세션 상태 초기화
@@ -190,10 +191,9 @@ else:
     st.info("📊 **[자기장 해석 모드]** ")
 
 # -----------------------------------------------------------------------------
-# 4. 시각화 엔진 (편집 모드: Plotly / 해석 모드: Native HTML5 Canvas + Plotly)
+# 4. 시각화 엔진
 # -----------------------------------------------------------------------------
 if not st.session_state.is_running:
-    import plotly.graph_objects as go
     fig = go.Figure()
 
     grid_x, grid_y = np.meshgrid(range(-20, 21), range(-20, 21))
@@ -273,7 +273,7 @@ if not st.session_state.is_running:
     selected_data = st.plotly_chart(fig, use_container_width=True, on_select="rerun", selection_mode="points", key="interactive_grid")
 
 else:
-    # 📊 [자기장 해석 모드] - 관찰 지점 통과 보정 및 70% 감속 처리된 Canvas 애니메이션 엔진
+    # 📊 [자기장 해석 모드]
     grid_range = np.linspace(-20.0, 20.0, 150)
     X, Y = np.meshgrid(grid_range, grid_range)
     Z_total = np.zeros_like(X)
@@ -292,18 +292,30 @@ else:
     target_pt = st.session_state.target_coord
     for wire in st.session_state.wires:
         foot, r_val = get_perpendicular_foot_and_radius(target_pt, wire)
-        if r_val > 0.05:
+        if wire['type'] == 'straight' and r_val > 0.05:
             I_val = get_numeric_current(wire['current_symbol'], st.session_state.symbol_values)
-            b_mag = abs(I_val / r_val) if wire['type'] == 'straight' else abs(I_val / 0.5)
+            b_mag = abs(I_val / r_val)
             circle_info_list.append({
                 "foot": [float(foot[0]), float(foot[1])],
                 "radius": float(r_val),
                 "bMag": float(b_mag),
                 "direction": int(wire.get('direction', 1)),
-                "type": str(wire['type']),
-                "p1": [float(wire['p1'][0]), float(wire['p1'][1])] if wire['type'] == 'straight' else [0, 0],
-                "p2": [float(wire['p2'][0]), float(wire['p2'][1])] if wire['type'] == 'straight' else [0, 0],
-                "center": [float(wire['center'][0]), float(wire['center'][1])] if wire['type'] == 'circle' else [0, 0]
+                "type": "straight",
+                "p1": [float(wire['p1'][0]), float(wire['p1'][1])],
+                "p2": [float(wire['p2'][0]), float(wire['p2'][1])],
+                "center": [0, 0]
+            })
+        elif wire['type'] == 'circle':
+            I_val = get_numeric_current(wire['current_symbol'], st.session_state.symbol_values)
+            circle_info_list.append({
+                "foot": [0, 0],
+                "radius": float(wire.get('radius', 0.5)),
+                "bMag": float(abs(I_val / 0.5)),
+                "direction": int(wire.get('direction', 1)),
+                "type": "circle",
+                "p1": [0, 0],
+                "p2": [0, 0],
+                "center": [float(wire['center'][0]), float(wire['center'][1])]
             })
 
     wires_json = json.dumps(st.session_state.wires)
@@ -381,23 +393,17 @@ else:
                 colorbar: {{ title: '자기장 B', tickvals: [-3, 0, 3], ticktext: ['⊗ 들어감', '0 상쇄', '⊙ 나옴'] }}
             }});
 
-            // 2) 관찰 지점을 통과하는 수직 방향 연장 타원 궤적 (kParallel = 0.50, kPerp = 1.00)
+            // 2) 직선 도선용 관찰 지점 통과 궤적
             const kParallel = 0.50;
             const kPerp = 1.00;
 
             for (let c of circles) {{
+                if (c.type !== 'straight') continue;
                 let ux = 1, uy = 0, nx = 0, ny = 1;
-                if (c.type === 'straight') {{
-                    let dx = (c.p2[0] - c.p1[0]) * c.direction;
-                    let dy = (c.p2[1] - c.p1[1]) * c.direction;
-                    let len = Math.hypot(dx, dy);
-                    if (len > 1e-5) {{ ux = dx / len; uy = dy / len; nx = -uy; ny = ux; }}
-                }} else {{
-                    let dx = targetPt[0] - c.center[0];
-                    let dy = targetPt[1] - c.center[1];
-                    let len = Math.hypot(dx, dy);
-                    if (len > 1e-5) {{ nx = dx / len; ny = dy / len; ux = -ny; uy = nx; }}
-                }}
+                let dx = (c.p2[0] - c.p1[0]) * c.direction;
+                let dy = (c.p2[1] - c.p1[1]) * c.direction;
+                let len = Math.hypot(dx, dy);
+                if (len > 1e-5) {{ ux = dx / len; uy = dy / len; nx = -uy; ny = ux; }}
 
                 let gx = [], gy = [];
                 for (let a = 0; a <= 2*Math.PI; a += 0.04) {{
@@ -472,7 +478,7 @@ else:
 
             Plotly.newPlot('plotly_canvas', traces, layout);
 
-            // Canvas 오버레이 기반 60FPS 애니메이션 엔진
+            // Canvas 애니메이션 엔진
             const pCanvas = document.getElementById('particle_canvas');
             const ctx = pCanvas.getContext('2d');
             const gd = document.getElementById('plotly_canvas');
@@ -490,90 +496,123 @@ else:
                 let xaxis = gd._fullLayout.xaxis;
                 let yaxis = gd._fullLayout.yaxis;
 
-                let rotFrac = (frameStep % 200) / 200.0;
+                let progress = (frameStep % 120) / 120.0;
 
                 for (let c of circles) {{
-                    let footX = c.foot[0], footY = c.foot[1];
-                    let rBase = c.radius;
-                    let bMag = c.bMag;
-                    let rotDir = c.direction;
-
-                    let ux = 1, uy = 0, nx = 0, ny = 1;
                     if (c.type === 'straight') {{
+                        // 기존 직선 도선 자기력선 회전 표현
+                        let footX = c.foot[0], footY = c.foot[1];
+                        let rBase = c.radius;
+                        let bMag = c.bMag;
+                        let rotDir = c.direction;
+
                         let dx = (c.p2[0] - c.p1[0]) * c.direction;
                         let dy = (c.p2[1] - c.p1[1]) * c.direction;
                         let len = Math.hypot(dx, dy);
+                        let ux = 1, uy = 0, nx = 0, ny = 1;
                         if (len > 1e-5) {{ ux = dx / len; uy = dy / len; nx = -uy; ny = ux; }}
-                    }} else {{
-                        let dx = targetPt[0] - c.center[0];
-                        let dy = targetPt[1] - c.center[1];
-                        let len = Math.hypot(dx, dy);
-                        if (len > 1e-5) {{ nx = dx / len; ny = dy / len; ux = -ny; uy = nx; }}
-                    }}
 
-                    // 기존 속도의 70% 수준으로 조정 (* 0.7)
-                    let speedMult = Math.min(Math.max(0.6 + 0.8 * bMag, 0.6), 3.0) * 0.7;
-                    let rOffsets = [0.0];
-                    let count = 18;
+                        let speedMult = Math.min(Math.max(0.6 + 0.8 * bMag, 0.6), 3.0) * 0.7;
+                        let rOffsets = [0.0];
+                        let count = 18;
 
-                    if (bMag >= 1.5) {{
-                        rOffsets = [-0.03, 0.0, 0.03];
-                        count = 28;
-                    }} else if (bMag >= 0.7) {{
-                        rOffsets = [-0.025, 0.025];
-                        count = 22;
-                    }}
+                        if (bMag >= 1.5) {{ rOffsets = [-0.03, 0.0, 0.03]; count = 28; }}
+                        else if (bMag >= 0.7) {{ rOffsets = [-0.025, 0.025]; count = 22; }}
 
-                    let baseAngle = Math.atan2(targetPt[1] - footY, targetPt[0] - footX);
+                        let baseAngle = Math.atan2(targetPt[1] - footY, targetPt[0] - footX);
+                        let rotFrac = (frameStep % 200) / 200.0;
 
-                    for (let rOff of rOffsets) {{
-                        let rCurr = rBase + rOff;
-                        for (let i = 0; i < count; i++) {{
-                            let angle = baseAngle + (2 * Math.PI * i / count) + (rotDir * 2 * Math.PI * rotFrac * speedMult);
+                        for (let rOff of rOffsets) {{
+                            let rCurr = rBase + rOff;
+                            for (let i = 0; i < count; i++) {{
+                                let angle = baseAngle + (2 * Math.PI * i / count) + (rotDir * 2 * Math.PI * rotFrac * speedMult);
+                                let cosA = Math.cos(angle);
+                                let sinA = Math.sin(angle);
+
+                                let px = footX + (rCurr * kParallel * cosA) * ux + (rCurr * kPerp * sinA) * nx;
+                                let py = footY + (rCurr * kParallel * cosA) * uy + (rCurr * kPerp * sinA) * ny;
+
+                                let bNet = calcTotalB(px, py);
+                                let alpha = Math.min(Math.abs(bNet) / 1.5, 0.90);
+                                if (alpha < 0.05) continue;
+
+                                let screenX = xaxis.l2p(px) + xaxis._offset;
+                                let screenY = yaxis.l2p(py) + yaxis._offset;
+
+                                let vx = (-rCurr * kParallel * sinA * ux + rCurr * kPerp * cosA * nx) * rotDir;
+                                let vy = (-rCurr * kParallel * sinA * uy + rCurr * kPerp * cosA * ny) * rotDir;
+
+                                let screenVx = vx * (xaxis._length / (xaxis.range[1] - xaxis.range[0]));
+                                let screenVy = -vy * (yaxis._length / (yaxis.range[1] - yaxis.range[0]));
+                                let tangentAngle = Math.atan2(screenVy, screenVx);
+
+                                let grayVal = bMag >= 1.2 ? 25 : (bMag >= 0.6 ? 70 : 140);
+                                let colorStr = `rgba(${{grayVal}}, ${{grayVal + 5}}, ${{grayVal + 10}}, ${{alpha.toFixed(2)}})`;
+
+                                ctx.save();
+                                ctx.translate(screenX, screenY);
+                                ctx.rotate(tangentAngle);
+                                ctx.beginPath();
+                                ctx.ellipse(0, 0, 9.0, 2.0, 0, 0, 2 * Math.PI);
+                                ctx.fillStyle = colorStr;
+                                ctx.fill();
+                                ctx.strokeStyle = `rgba(10, 10, 10, ${{Math.min(alpha + 0.1, 1.0)}})`;
+                                ctx.lineWidth = 0.8;
+                                ctx.stroke();
+                                ctx.restore();
+                            }}
+                        }}
+                    }} else if (c.type === 'circle') {{
+                        // 원형 도선: 중심 부분 수직 방향 입자 이탈/흡수 효과 (⊙ / ⊗)
+                        let cx = c.center[0], cy = c.center[1];
+                        let screenCx = xaxis.l2p(cx) + xaxis._offset;
+                        let screenCy = yaxis.l2p(cy) + yaxis._offset;
+                        let isOutwards = (c.direction === 1); // ⊙ (나옴): 확산 / ⊗ (들어감): 축소
+
+                        let particleCount = 12;
+                        for (let i = 0; i < particleCount; i++) {{
+                            let pFrac = (progress + i / particleCount) % 1.0;
                             
-                            let cosA = Math.cos(angle);
-                            let sinA = Math.sin(angle);
+                            // ⊙ 나옴: 중심(0) -> 외부(R) 수축/확산, ⊗ 들어감: 외부(R) -> 중심(0)
+                            let currentR = isOutwards ? pFrac * 0.4 : (1.0 - pFrac) * 0.4;
+                            let angle = (i * (2 * Math.PI / particleCount));
 
-                            // 관찰 지점을 정확히 통과하는 수직 연장 타원 궤도
-                            let px = footX + (rCurr * kParallel * cosA) * ux + (rCurr * kPerp * sinA) * nx;
-                            let py = footY + (rCurr * kParallel * cosA) * uy + (rCurr * kPerp * sinA) * ny;
+                            let px = cx + currentR * Math.cos(angle);
+                            let py = cy + currentR * Math.sin(angle);
 
-                            let bNet = calcTotalB(px, py);
-                            let alpha = Math.min(Math.abs(bNet) / 1.5, 0.90);
-                            if (alpha < 0.05) continue;
-
-                            // 화면 픽셀 좌표 변환
                             let screenX = xaxis.l2p(px) + xaxis._offset;
                             let screenY = yaxis.l2p(py) + yaxis._offset;
 
-                            // 순간 속도 벡터 (데이터 스페이스) -> 화면 스페이스 변환
-                            let vx = (-rCurr * kParallel * sinA * ux + rCurr * kPerp * cosA * nx) * rotDir;
-                            let vy = (-rCurr * kParallel * sinA * uy + rCurr * kPerp * cosA * ny) * rotDir;
+                            let size = isOutwards ? (1.5 + pFrac * 3.5) : (5.0 - pFrac * 3.5);
+                            let alpha = Math.sin(pFrac * Math.PI) * 0.8;
 
-                            let screenVx = vx * (xaxis._length / (xaxis.range[1] - xaxis.range[0]));
-                            let screenVy = -vy * (yaxis._length / (yaxis.range[1] - yaxis.range[0]));
-                            let tangentAngle = Math.atan2(screenVy, screenVx);
-
-                            let grayVal = 100;
-                            if (bMag >= 1.2) grayVal = 25;
-                            else if (bMag >= 0.6) grayVal = 70;
-                            else grayVal = 140;
-
-                            let colorStr = `rgba(${{grayVal}}, ${{grayVal + 5}}, ${{grayVal + 10}}, ${{alpha.toFixed(2)}})`;
-
-                            // 고이심률 타원 입자 렌더링
                             ctx.save();
-                            ctx.translate(screenX, screenY);
-                            ctx.rotate(tangentAngle);
-
                             ctx.beginPath();
-                            ctx.ellipse(0, 0, 9.0, 2.0, 0, 0, 2 * Math.PI);
-                            ctx.fillStyle = colorStr;
+                            ctx.arc(screenX, screenY, Math.max(size, 0.5), 0, 2 * Math.PI);
+                            ctx.fillStyle = `rgba(50, 50, 60, ${{alpha.toFixed(2)}})`;
                             ctx.fill();
-                            ctx.strokeStyle = `rgba(10, 10, 10, ${{Math.min(alpha + 0.1, 1.0)}})`;
+                            ctx.strokeStyle = `rgba(0, 0, 0, ${{alpha.toFixed(2)}})`;
                             ctx.lineWidth = 0.8;
                             ctx.stroke();
 
+                            // ⊙ : 중앙 점(.) / ⊗ : X자 표시 렌더링
+                            if (size > 2.5) {{
+                                ctx.beginPath();
+                                if (isOutwards) {{
+                                    ctx.arc(screenX, screenY, 0.8, 0, 2 * Math.PI);
+                                    ctx.fillStyle = `rgba(0, 0, 0, ${{alpha.toFixed(2)}})`;
+                                    ctx.fill();
+                                }} else {{
+                                    let s = size * 0.5;
+                                    ctx.moveTo(screenX - s, screenY - s);
+                                    ctx.lineTo(screenX + s, screenY + s);
+                                    ctx.moveTo(screenX + s, screenY - s);
+                                    ctx.lineTo(screenX - s, screenY + s);
+                                    ctx.strokeStyle = `rgba(0, 0, 0, ${{alpha.toFixed(2)}})`;
+                                    ctx.lineWidth = 0.8;
+                                    ctx.stroke();
+                                }}
+                            }}
                             ctx.restore();
                         }}
                     }}
