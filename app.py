@@ -7,7 +7,7 @@ import streamlit.components.v1 as components
 # -----------------------------------------------------------------------------
 # 1. 페이지 및 세션 상태 초기화
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="2D 도선 자기장 시각화 플랫폼", layout="wide")
+st.set_page_config(page_title="도선에 의한 자기장 시뮬레이터", layout="wide")
 
 if "wires" not in st.session_state:
     st.session_state.wires = []
